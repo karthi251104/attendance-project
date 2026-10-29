@@ -1,0 +1,18 @@
+# Never commit real employee data
+*.xlsm
+*.xlsx
+*.xls
+*.csv
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Local tooling
+.claude/

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}My teams{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Attendance to review</h1>
+  {% if cycles %}
+    <ul class="list">
+    {% for c in cycles %}<li><a href="/team/{{ c.id }}">{{ c.name }}</a>{% if c.status == "locked" %} <span class="badge">Locked</span>{% endif %}</li>{% endfor %}
+    </ul>
+  {% else %}
+    <p>There is no attendance for you to review. You are not listed as a manager in any open attendance cycle.</p>
+    <p class="muted">Signed in as {{ user.email }}. If this is wrong, contact HR.</p>
+  {% endif %}
+</section>
+{% endblock %}

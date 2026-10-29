@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#f4f5f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dfe1e6;">
+      <tr><td style="padding:24px;font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:22px;color:#172b4d;">
+        <p style="margin:0 0 16px;">Dear {{ manager_name }},</p>
+        <p style="margin:0 0 16px;">Please review the attendance of your {{ team_size }} team member{{ "" if team_size == 1 else "s" }} for {{ cycle_name }}.
+          If any day is incorrect, open the portal, correct it and click Save.</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 20px;">
+          <tr><td bgcolor="#0b5cad" style="background:#0b5cad;">
+            <a href="{{ link }}" style="display:inline-block;padding:12px 22px;font-family:Segoe UI,Arial,sans-serif;font-size:15px;color:#ffffff;text-decoration:none;font-weight:bold;">Review attendance</a>
+          </td></tr>
+        </table>
+        <p style="margin:0 0 16px;font-size:13px;color:#5e6c84;">Or open this link: <a href="{{ link }}" style="color:#0b5cad;">{{ link }}</a></p>
+        {% if deadline %}<p style="margin:0 0 16px;">Corrections are open until {{ deadline }}.</p>{% endif %}
+        <p style="margin:0;font-size:13px;color:#5e6c84;">This is an automated email from HR.</p>
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>

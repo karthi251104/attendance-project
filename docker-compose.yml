@@ -1,0 +1,12 @@
+# Local MongoDB for development:  docker compose up -d
+# Then set MONGODB_URI=mongodb://localhost:27017 in .env
+services:
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+volumes:
+  mongo-data:

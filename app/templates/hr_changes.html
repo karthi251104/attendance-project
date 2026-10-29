@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Change history{% endblock %}
+{% block content %}
+<div class="row-between">
+  <div><h1>Change history</h1><p class="muted"><a href="/hr/cycles/{{ cycle.id }}">{{ cycle.name }}</a></p></div>
+  <a class="button" href="/hr/cycles/{{ cycle.id }}/changes.csv?employee={{ filters.employee|urlencode }}&changed_by={{ filters.changed_by|urlencode }}&manager={{ filters.manager|urlencode }}">Download CSV</a>
+</div>
+<form method="get" class="filters">
+  <label>Employee ID <input name="employee" value="{{ filters.employee }}" inputmode="numeric"></label>
+  <label>Changed by <input name="changed_by" value="{{ filters.changed_by }}" type="email"></label>
+  <label>Team <select name="manager"><option value="">All managers</option>
+    {% for m in managers %}<option value="{{ m.manager_email }}" {% if m.manager_email == filters.manager %}selected{% endif %}>{{ m.manager_name }}</option>{% endfor %}
+  </select></label>
+  <button type="submit">Filter</button>
+</form>
+<div class="table-wrap">
+<table class="table">
+  <thead><tr><th>When</th><th>Employee</th><th>Date</th><th>Old</th><th>New</th><th>Changed by</th><th>Role</th><th>Comment</th></tr></thead>
+  <tbody>
+  {% for c in changes %}
+    <tr>
+      <td>{{ fmt_datetime(c.changed_at) }}</td>
+      <td>{{ c.employee_id }} {{ names.get(c.employee_id, "") }}</td>
+      <td>{{ fmt_date(c.date) }}</td>
+      <td>{{ c.old_value or "—" }}</td>
+      <td><b>{{ c.new_value }}</b></td>
+      <td>{{ c.changed_by_email }}</td>
+      <td>{{ c.changed_by_role }}</td>
+      <td>{{ c.comment or "" }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="muted">No changes yet.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

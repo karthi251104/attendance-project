@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ cycle.name }}{% endblock %}
+{% block main_class %}page page-wide{% endblock %}
+{% block head %}<script src="/static/grid.js" defer></script>{% endblock %}
+{% block content %}
+<div class="row-between">
+  <div>
+    <h1>{{ "All employees" if hr_view else "Team attendance" }}</h1>
+    <p class="muted">{{ cycle.name }}
+      {% if cycle.correction_deadline %} · Corrections open until {{ fmt_datetime(cycle.correction_deadline) }}{% endif %}
+      {% if cycle.status == "locked" %} · <span class="badge badge-warn">Locked</span>{% endif %}
+      {% if hr_view %} · <a href="/hr/cycles/{{ cycle.id }}">Back to review</a>{% endif %}</p>
+  </div>
+</div>
+
+{% if hr_view %}
+<form method="get" class="filters">
+  <label>Manager <select name="manager"><option value="">All managers</option>
+    {% for m in managers %}<option value="{{ m.manager_email }}" {% if m.manager_email == filter_manager %}selected{% endif %}>{{ m.manager_name }} ({{ m.team_size }})</option>{% endfor %}
+  </select></label>
+  <label>Department <select name="department"><option value="">All departments</option>
+    {% for d in departments %}<option {% if d == filter_department %}selected{% endif %}>{{ d }}</option>{% endfor %}
+  </select></label>
+  <button type="submit">Filter</button>
+</form>
+{% endif %}
+
+{% if read_only_reason %}<div class="alert alert-warn">{{ read_only_reason }} The attendance is shown read-only.</div>{% endif %}
+
+{% if rows %}
+<p class="muted small legend"><span class="swatch swatch-edited"></span> changed in the portal <span class="swatch swatch-dirty"></span> not saved yet · Tap or hover a day to see the SAP schedule and worked hours.</p>
+<div class="grid-wrap">
+<table class="grid" id="grid"
+       data-cycle-id="{{ cycle.id }}" data-csrf="{{ csrf_token }}" data-editable="{{ 'false' if read_only_reason else 'true' }}">
+  <thead>
+    <tr>
+      <th class="sticky sticky-1">Employee ID</th>
+      <th class="sticky sticky-2">Employee Name</th>
+      {% for d in dates %}<th class="day-head"><span>{{ d.label }}</span><small>{{ d.weekday }}</small></th>{% endfor %}
+      {% for t in total_headers %}<th class="total-head">{{ t }}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr data-employee-id="{{ r.employee_id }}">
+      <td class="sticky sticky-1">{{ r.employee_id }}</td>
+      <td class="sticky sticky-2"><div class="name">{{ r.employee_name }}</div>
+        {% if r.badge %}<span class="badge badge-warn small">{{ r.badge }}</span>{% endif %}
+        {% if hr_view %}<div class="muted small">{{ r.manager_name }}</div>{% endif %}</td>
+      {% for c in r.cells %}
+      <td class="day{% if c.edited %} edited{% endif %}" title="{{ c.tooltip }}{% if c.calculated and c.calculated != c.value %} · SAP: {{ c.calculated }}{% endif %}">
+        {% if read_only_reason %}<span class="value">{{ c.value or "—" }}</span>
+        {% else %}
+        <select data-date="{{ c.date }}" data-loaded="{{ c.value }}" aria-label="{{ r.employee_id }} {{ c.date }}">
+          {% if not c.value %}<option value="" selected>—</option>{% endif %}
+          {% for s in statuses %}<option{% if s == c.value %} selected{% endif %}>{{ s }}</option>{% endfor %}
+          {% if c.value and c.value not in statuses %}<option value="{{ c.value }}" selected disabled>{{ c.value }}</option>{% endif %}
+        </select>
+        {% endif %}
+      </td>
+      {% endfor %}
+      {% for t in total_headers %}<td class="total" data-total="{{ t }}">{{ r.totals[t] }}</td>{% endfor %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if not read_only_reason %}
+<div class="savebar" id="savebar">
+  <input type="text" id="comment" maxlength="500" placeholder="Comment (optional)" aria-label="Comment (optional)">
+  <span id="pending" class="muted">No unsaved changes</span>
+  <button type="button" class="primary" id="save" disabled>Save changes</button>
+</div>
+<div id="message" class="alert hidden" role="status"></div>
+{% endif %}
+{% else %}
+<section class="card"><p>No employees to show.</p></section>
+{% endif %}
+{% endblock %}

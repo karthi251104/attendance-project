@@ -1,4 +1,4 @@
-"""Phase 6: login, sessions, startup checks, security headers and health check."""
+"""Sign-in, sessions, startup checks, security headers, the health check and the SPA fallback."""
 
 from datetime import timedelta
 
@@ -39,23 +39,45 @@ def test_graph_mode_needs_sender_mailbox() -> None:
     assert Settings(_env_file=None, email_mode="graph").startup_problems()
 
 
-def test_dev_login_disabled_means_entra_redirect(portal_factory, settings, monkeypatch) -> None:
+def test_session_before_and_after_login(portal) -> None:
+    anonymous = portal.session()
+    assert anonymous["user"] is None and anonymous["auth_mode"] == "dev" and anonymous["csrf_token"]
+    assert anonymous["statuses"] == ["P", "A", "OFF", "PH", "CO", "ML", "PL"]
+    portal.login("Manager.One@Example.com")
+    assert portal.session()["user"] == {"email": MANAGER_ONE, "name": "manager.one", "is_hr": False}
+    portal.login(HR)
+    assert portal.session()["user"]["is_hr"] is True
+
+
+def test_dev_login_needs_csrf_and_an_email(portal) -> None:
+    portal.session()
+    assert portal.client.post("/api/auth/dev-login", json={"email": HR}).status_code == 403
+    assert portal.post("/api/auth/dev-login", {"email": "nope"}).status_code == 400
+
+
+def test_entra_mode_redirects_and_refuses_dev_login(portal_factory, settings, monkeypatch) -> None:
     monkeypatch.setattr(entra, "start_login", lambda s: {"auth_uri": "https://login.microsoftonline.com/x/authorize", "state": "s"})
     portal = portal_factory(settings.model_copy(update={"dev_login": False}))
-    response = portal.client.get("/login", follow_redirects=False)
+    assert portal.session()["auth_mode"] == "entra"
+    response = portal.client.get("/auth/login", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"].startswith("https://login.microsoftonline.com/")
-    forced = portal.client.post("/login/dev", data={"email": HR, "csrf_token": "x"})
-    assert forced.status_code == 403
+    assert portal.post("/api/auth/dev-login", {"email": HR}).status_code == 403
+
+
+def test_dev_mode_login_link_goes_to_the_app_form(portal) -> None:
+    response = portal.client.get("/auth/login?next=/hr", follow_redirects=False)
+    assert response.headers["location"] == "/login?next=%2Fhr"
 
 
 def test_entra_callback_logs_user_in(portal_factory, settings, monkeypatch) -> None:
     monkeypatch.setattr(entra, "start_login", lambda s: {"auth_uri": "https://login.microsoftonline.com/x", "state": "s"})
     monkeypatch.setattr(entra, "finish_login", lambda s, flow, params: (HR, "HR Person"))
     portal = portal_factory(settings.model_copy(update={"dev_login": False}))
-    portal.client.get("/login?next=/hr/upload", follow_redirects=False)
+    portal.client.get("/auth/login?next=/hr/upload", follow_redirects=False)
     response = portal.client.get("/auth/callback?code=abc&state=s", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/hr/upload"
-    assert portal.client.get("/hr").status_code == 200
+    assert portal.session()["user"] == {"email": HR, "name": "HR Person", "is_hr": True}
+    assert portal.get("/api/cycles").status_code == 200
 
 
 def test_entra_callback_failure(portal_factory, settings, monkeypatch) -> None:
@@ -65,9 +87,10 @@ def test_entra_callback_failure(portal_factory, settings, monkeypatch) -> None:
     monkeypatch.setattr(entra, "start_login", lambda s: {"auth_uri": "https://login.microsoftonline.com/x", "state": "s"})
     monkeypatch.setattr(entra, "finish_login", fail)
     portal = portal_factory(settings.model_copy(update={"dev_login": False}))
-    portal.client.get("/login", follow_redirects=False)
-    assert portal.client.get("/auth/callback?error=x").status_code == 400
-    assert portal.client.get("/hr", follow_redirects=False).status_code == 303  # still not logged in
+    portal.client.get("/auth/login", follow_redirects=False)
+    response = portal.client.get("/auth/callback?error=x", follow_redirects=False)
+    assert response.headers["location"] == "/login?error=Nope"
+    assert portal.session()["user"] is None
 
 
 def test_finish_login_reads_claims(monkeypatch) -> None:
@@ -91,16 +114,25 @@ def test_finish_login_rejects_other_tenant(monkeypatch) -> None:
 
 def test_session_expires_after_8_hours(portal, monkeypatch) -> None:
     portal.login(HR)
-    assert portal.client.get("/hr").status_code == 200
+    assert portal.get("/api/cycles").status_code == 200
     later = now_utc() + timedelta(hours=8, minutes=1)
     monkeypatch.setattr("app.auth.session.now_utc", lambda: later)
-    assert portal.client.get("/hr", follow_redirects=False).status_code == 303
+    response = portal.get("/api/cycles")
+    assert response.status_code == 401 and "sign in again" in response.json()["error"]
 
 
 def test_logout(portal) -> None:
     portal.login(MANAGER_ONE)
-    portal.post("/logout")
-    assert portal.client.get("/", follow_redirects=False).headers["location"].startswith("/login")
+    assert portal.post("/api/auth/logout").json() == {"redirect": "/login"}
+    assert portal.session()["user"] is None
+    assert portal.get("/api/my-cycles").status_code == 401
+
+
+def test_logout_with_entra_goes_to_microsoft(portal_factory, settings) -> None:
+    portal = portal_factory(settings.model_copy(update={"dev_login": False, "entra_tenant_id": "tid"}))
+    portal.session()
+    redirect = portal.post("/api/auth/logout").json()["redirect"]
+    assert redirect.startswith("https://login.microsoftonline.com/tid/oauth2/v2.0/logout?post_logout_redirect_uri=")
 
 
 @pytest.mark.parametrize("target, expected", [
@@ -111,12 +143,12 @@ def test_safe_next(target, expected) -> None:
 
 
 def test_security_headers_and_cookie(portal) -> None:
-    response = portal.client.get("/login")
+    response = portal.client.get("/api/session")
     assert response.headers["x-frame-options"] == "DENY"
     assert "default-src 'self'" in response.headers["content-security-policy"]
-    portal.login(HR)
-    cookie = portal.client.post("/login/dev", data={"email": HR, "csrf_token": portal.csrf}, follow_redirects=False).headers["set-cookie"]
-    assert "httponly" in cookie.lower() and "samesite=lax" in cookie.lower()
+    assert response.headers["cache-control"] == "no-store"
+    cookie = response.headers["set-cookie"].lower()
+    assert "httponly" in cookie and "samesite=lax" in cookie
 
 
 def test_healthz(portal) -> None:
@@ -124,6 +156,27 @@ def test_healthz(portal) -> None:
     assert response.status_code == 200 and response.json() == {"status": "ok", "database": True}
 
 
-def test_manager_home_with_no_team(portal) -> None:
+def test_manager_with_no_team_has_no_cycles(portal) -> None:
     portal.login("nobody@example.com")
-    assert "no attendance for you to review" in portal.client.get("/").text
+    assert portal.get("/api/my-cycles").json() == {"cycles": []}
+
+
+def test_spa_fallback_serves_index(portal_factory, settings, tmp_path) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "app-123.js").write_text("console.log(1)")
+    (tmp_path / "index.html").write_text("<!doctype html><div id=root></div>")
+    (tmp_path / "favicon.svg").write_text("<svg/>")
+    portal = portal_factory(settings.model_copy(update={"frontend_dist": str(tmp_path)}))
+    for path in ("/", "/hr", "/team/abc", "/login?next=/hr"):
+        response = portal.client.get(path)
+        assert response.status_code == 200 and "id=root" in response.text, path
+    asset = portal.client.get("/assets/app-123.js")
+    assert asset.status_code == 200 and "immutable" in asset.headers["cache-control"]
+    assert portal.client.get("/favicon.svg").text == "<svg/>"
+    assert portal.client.get("/api/nothing-here").status_code in (401, 404)
+    assert portal.client.get("/..%2F..%2Fapp%2Fconfig.py").text.startswith("<!doctype html>")
+
+
+def test_unbuilt_frontend_shows_a_hint(portal_factory, settings, tmp_path) -> None:
+    portal = portal_factory(settings.model_copy(update={"frontend_dist": str(tmp_path / "missing")}))
+    assert "npm run build" in portal.client.get("/").text

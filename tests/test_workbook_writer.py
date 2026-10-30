@@ -181,7 +181,7 @@ def test_side_by_side_script_finds_differences(make_workbook, capsys) -> None:
     assert "Fake Employee" not in out  # never print names
 
 
-# ---------- the round trip through the API (spec section 11) ----------
+# ---------- the round trip through the API ----------
 
 def test_round_trip_three_edits(uploaded) -> None:
     portal, cycle_id = uploaded
@@ -189,7 +189,7 @@ def test_round_trip_three_edits(uploaded) -> None:
     response = portal.save(cycle_id, [{"employee_id": e, "date": d, "value": v} for e, d, v in edits])
     assert response.json()["saved"] == 3
 
-    download = portal.post(f"/hr/cycles/{cycle_id}/download")
+    download = portal.get(f"/api/cycles/{cycle_id}/download")
     assert download.status_code == 200
     assert download.headers["content-disposition"].startswith('attachment; filename="Attendance_20Sep2026_19Oct2026_updated_')
     out = download.content

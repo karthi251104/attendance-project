@@ -1,4 +1,4 @@
-"""Phase 5: emails to managers (console and Microsoft Graph; Graph is mocked, no network)."""
+"""Emails to managers (console and Microsoft Graph; Graph is mocked, no network)."""
 
 import json
 
@@ -14,23 +14,24 @@ from tests.conftest import MANAGER_ONE, MANAGER_TWO
 
 def test_send_to_all_managers(uploaded) -> None:
     portal, cycle_id = uploaded
-    assert portal.post(f"/hr/cycles/{cycle_id}/emails").status_code == 303
+    assert portal.post(f"/api/cycles/{cycle_id}/emails").json() == {"queued": 2}
     assert sorted(m.to for m in portal.sender.sent) == [MANAGER_ONE, MANAGER_TWO]
     log = portal.repo.latest_email_by_manager(cycle_id)
     assert {email: entry["status"] for email, entry in log.items()} == {MANAGER_ONE: "sent", MANAGER_TWO: "sent"}
-    assert "Sent" in portal.client.get(f"/hr/cycles/{cycle_id}").text
+    managers = portal.get(f"/api/cycles/{cycle_id}/managers").json()["managers"]
+    assert {m["email_status"] for m in managers} == {"sent"} and all(m["email_sent_at"] for m in managers)
 
 
 def test_resend_to_one_manager(uploaded) -> None:
     portal, cycle_id = uploaded
-    portal.post(f"/hr/cycles/{cycle_id}/emails", manager_email=MANAGER_TWO)
+    portal.post(f"/api/cycles/{cycle_id}/emails", {"manager_email": MANAGER_TWO})
     assert [m.to for m in portal.sender.sent] == [MANAGER_TWO]
 
 
 def test_email_content(uploaded) -> None:
     portal, cycle_id = uploaded
-    portal.post(f"/hr/cycles/{cycle_id}/deadline", deadline="2026-11-05")
-    portal.post(f"/hr/cycles/{cycle_id}/emails", manager_email=MANAGER_ONE)
+    portal.put(f"/api/cycles/{cycle_id}/deadline", {"deadline": "2026-11-05"})
+    portal.post(f"/api/cycles/{cycle_id}/emails", {"manager_email": MANAGER_ONE})
     [message] = portal.sender.sent
     assert message.subject == "Please review your team's attendance: 20 Sep 2026 - 19 Oct 2026"
     body = message.html_body
@@ -46,7 +47,7 @@ def test_invalid_manager_email_is_logged_as_failed(portal, make_workbook) -> Non
     from tests.conftest import HR
     portal.login(HR)
     cycle_id = portal.upload(make_workbook(hc_overrides={20000001: {"Email ID": "not-an-email"}}))
-    portal.post(f"/hr/cycles/{cycle_id}/emails")
+    portal.post(f"/api/cycles/{cycle_id}/emails")
     log = portal.repo.latest_email_by_manager(cycle_id)
     assert log["not-an-email"]["status"] == "failed"
     assert "not-an-email" not in [m.to for m in portal.sender.sent]

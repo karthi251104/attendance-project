@@ -1,4 +1,4 @@
-"""Phase 2: upload pipeline and HR screens."""
+"""Upload pipeline and the HR review data."""
 
 from datetime import date
 
@@ -37,50 +37,51 @@ def test_deadline_is_end_of_day_in_ist(portal, make_workbook) -> None:
     assert deadline.isoformat().startswith("2026-11-05T18:29:59")  # 23:59:59 IST
 
 
-def test_review_page_shows_summary(uploaded) -> None:
+def test_review_data(uploaded) -> None:
     portal, cycle_id = uploaded
-    page = portal.client.get(f"/hr/cycles/{cycle_id}").text
-    for text in ("20 Sep 2026 - 19 Oct 2026", "Employees", "Fake Manager One", "manager.one@example.com",
-                 "Send emails to all managers", "Download updated workbook", "Lock cycle", "empty emp email"):
-        assert text in page
-    assert "20 Sep 2026" in portal.client.get("/hr").text
+    cycle = portal.get(f"/api/cycles/{cycle_id}").json()
+    assert cycle["name"] == "20 Sep 2026 - 19 Oct 2026" and cycle["role"] == "hr"
+    assert (cycle["start_date"], cycle["end_date"], cycle["uploaded_by"]) == ("2026-09-20", "2026-10-19", HR)
+    assert cycle["stats"]["employees"] == 6 and cycle["can_edit"] is True
+    [listed] = portal.get("/api/cycles").json()["cycles"]
+    assert listed["id"] == cycle_id and "dates" not in listed
+    [issue] = portal.get(f"/api/cycles/{cycle_id}/exceptions").json()["exceptions"]
+    assert (issue["type"], issue["employee_id"]) == ("empty_emp_email", "10000002")
 
 
 def test_exceptions_csv(uploaded) -> None:
     portal, cycle_id = uploaded
-    response = portal.client.get(f"/hr/cycles/{cycle_id}/exceptions.csv")
+    response = portal.get(f"/api/cycles/{cycle_id}/exceptions.csv")
     assert response.headers["content-type"].startswith("text/csv")
     lines = response.text.strip().splitlines()
-    assert lines[0].lstrip("﻿").startswith("Severity,Type") and "empty_emp_email" in lines[1]
+    assert lines[0].lstrip("\ufeff").startswith("Severity,Type") and "empty_emp_email" in lines[1]
 
 
 @pytest.mark.parametrize("options, filename, message", [
     ({}, "notes.txt", "Please upload an Excel workbook"),
-    ({"include_hc": False}, None, "HC_Teamlease&#39; sheet. Please check that you uploaded"),
-    ({"with_to_consider": True}, None, "already has a &#39;TO CONSIDER&#39; sheet"),
+    ({"include_hc": False}, None, "HC_Teamlease' sheet. Please check that you uploaded"),
+    ({"with_to_consider": True}, None, "already has a 'TO CONSIDER' sheet"),
 ])
 def test_bad_uploads_show_clear_errors(portal, make_workbook, options, filename, message) -> None:
     portal.login(HR)
     path = make_workbook(**options)
-    response = portal.client.post("/hr/upload", data={"csrf_token": portal.csrf},
-                                  files={"file": (filename or path.name, path.read_bytes(), "application/octet-stream")})
-    assert response.status_code == 400 and message in response.text
+    response = portal.upload_response(path, filename=filename)
+    assert response.status_code == 400 and message in response.json()["error"]
     assert portal.repo.list_cycles() == []
 
 
 def test_not_a_real_excel_file(portal) -> None:
     portal.login(HR)
-    response = portal.client.post("/hr/upload", data={"csrf_token": portal.csrf},
+    response = portal.client.post("/api/cycles", headers={"X-CSRF-Token": portal.csrf},
                                   files={"file": ("fake.xlsm", b"not a zip", "application/octet-stream")})
-    assert response.status_code == 400 and "could not be opened" in response.text
+    assert response.status_code == 400 and "could not be opened" in response.json()["error"]
 
 
 def test_file_too_large(portal_factory, settings, make_workbook) -> None:
     portal = portal_factory(settings.model_copy(update={"max_upload_mb": 0}))
     portal.login(HR)
-    response = portal.client.post("/hr/upload", data={"csrf_token": portal.csrf},
-                                  files={"file": ("w.xlsx", make_workbook().read_bytes(), "application/octet-stream")})
-    assert response.status_code == 400 and "larger than 0 MB" in response.text
+    response = portal.upload_response(make_workbook())
+    assert response.status_code == 400 and "larger than 0 MB" in response.json()["error"]
 
 
 def test_failed_save_rolls_back(portal, settings, make_workbook, monkeypatch) -> None:
@@ -97,10 +98,7 @@ def test_failed_save_rolls_back(portal, settings, make_workbook, monkeypatch) ->
 
 def test_manager_cannot_upload(portal, make_workbook) -> None:
     portal.login(MANAGER_ONE)
-    path = make_workbook()
-    response = portal.client.post("/hr/upload", data={"csrf_token": portal.csrf},
-                                  files={"file": (path.name, path.read_bytes(), "application/octet-stream")})
-    assert response.status_code == 403
+    assert portal.upload_response(make_workbook()).status_code == 403
 
 
 def test_process_upload_rejects_wrong_extension(portal, settings, make_workbook) -> None:

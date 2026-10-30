@@ -1,4 +1,3 @@
-import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -36,36 +35,44 @@ def settings() -> Settings:
 
 
 class Portal:
-    """A test client plus helpers to log in and call the app like a browser."""
+    """A test client plus helpers to sign in and call the API like the React app does."""
 
     def __init__(self, app, repo: Repository, files: MemoryFileStore, sender: ConsoleSender) -> None:
         self.client = TestClient(app)
         self.repo, self.files, self.sender = repo, files, sender
         self.csrf = ""
 
-    def _page_csrf(self) -> str:
-        page = self.client.get("/login")  # renders the session's CSRF token
-        return re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    def session(self) -> dict:
+        data = self.client.get("/api/session").json()
+        self.csrf = data["csrf_token"]
+        return data
 
     def login(self, email: str) -> None:
-        response = self.client.post("/login/dev", data={"email": email, "csrf_token": self._page_csrf(), "next": "/"},
-                                    follow_redirects=False)
-        assert response.status_code == 303
-        self.csrf = self._page_csrf()  # login creates a new session with a new token
+        self.session()
+        response = self.client.post("/api/auth/dev-login", json={"email": email}, headers={"X-CSRF-Token": self.csrf})
+        assert response.status_code == 200, response.text
+        self.session()  # signing in starts a new session with a new token
+
+    def upload_response(self, path: Path, deadline: str = "", filename: str | None = None):
+        return self.client.post("/api/cycles", data={"deadline": deadline}, headers={"X-CSRF-Token": self.csrf},
+                                files={"file": (filename or path.name, path.read_bytes(), "application/octet-stream")})
 
     def upload(self, path: Path, deadline: str = "", filename: str | None = None) -> str:
-        response = self.client.post("/hr/upload", data={"csrf_token": self.csrf, "deadline": deadline},
-                                    files={"file": (filename or path.name, path.read_bytes(), "application/octet-stream")},
-                                    follow_redirects=False)
-        assert response.status_code == 303, response.text
-        return response.headers["location"].rsplit("/", 1)[1]
+        response = self.upload_response(path, deadline, filename)
+        assert response.status_code == 200, response.text
+        return response.json()["id"]
 
-    def post(self, url: str, **data):
-        return self.client.post(url, data={"csrf_token": self.csrf, **data}, follow_redirects=False)
+    def post(self, url: str, json: dict | None = None):
+        return self.client.post(url, json=json or {}, headers={"X-CSRF-Token": self.csrf})
+
+    def put(self, url: str, json: dict):
+        return self.client.put(url, json=json, headers={"X-CSRF-Token": self.csrf})
+
+    def get(self, url: str, **params):
+        return self.client.get(url, params=params)
 
     def save(self, cycle_id: str, changes: list[dict], comment: str | None = None):
-        return self.client.post(f"/api/cycles/{cycle_id}/changes", json={"changes": changes, "comment": comment},
-                                headers={"X-CSRF-Token": self.csrf})
+        return self.post(f"/api/cycles/{cycle_id}/changes", {"changes": changes, "comment": comment})
 
 
 @pytest.fixture

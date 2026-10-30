@@ -1,4 +1,4 @@
-"""Phase 3: managers see and edit only their own team; every edit is logged; lock and deadline rules."""
+"""Managers see and edit only their own team; every edit is logged; lock and deadline rules."""
 
 from datetime import timedelta
 
@@ -10,9 +10,10 @@ TEAM_TWO = {"10000004", "10000005", "10000006"}
 DAY = "2026-09-21"  # 10000001 worked 4:59:59 on a 6DAG day -> A
 
 
-def grid_ids(html: str) -> set[str]:
-    import re
-    return set(re.findall(r'data-employee-id="(\d+)"', html))
+def team_ids(portal, cycle_id: str, **params) -> set[str]:
+    response = portal.get(f"/api/cycles/{cycle_id}/employees", **params)
+    assert response.status_code == 200, response.text
+    return {e["employee_id"] for e in response.json()["employees"]}
 
 
 # ---------- reading ----------
@@ -20,56 +21,72 @@ def grid_ids(html: str) -> set[str]:
 def test_manager_sees_only_own_team(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.login(MANAGER_ONE)
-    page = portal.client.get(f"/team/{cycle_id}")
-    assert page.status_code == 200
-    assert grid_ids(page.text) == TEAM_ONE
-    for other in ("Fake Employee D", "Fake Employee E", "Fake Employee F"):
-        assert other not in page.text
+    response = portal.get(f"/api/cycles/{cycle_id}/employees")
+    assert {e["employee_id"] for e in response.json()["employees"]} == TEAM_ONE
+    assert "Fake Employee D" not in response.text
+    assert "manager_email" not in response.json()["employees"][0]  # managers do not get other people's emails
+
+
+def test_manager_filters_are_ignored(uploaded) -> None:
+    portal, cycle_id = uploaded
+    portal.login(MANAGER_ONE)
+    assert team_ids(portal, cycle_id, manager=MANAGER_TWO) == TEAM_ONE
 
 
 def test_manager_email_match_is_case_insensitive(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.login("Manager.Two@EXAMPLE.com")  # the sheet has "Manager.Two@Example.com"
-    assert grid_ids(portal.client.get(f"/team/{cycle_id}").text) == TEAM_TWO
+    assert team_ids(portal, cycle_id) == TEAM_TWO
+
+
+def test_cycle_for_manager(uploaded) -> None:
+    portal, cycle_id = uploaded
+    portal.login(MANAGER_ONE)
+    cycle = portal.get(f"/api/cycles/{cycle_id}").json()
+    assert cycle["role"] == "manager" and cycle["can_edit"] is True and len(cycle["dates"]) == 30
+    assert [c["id"] for c in portal.get("/api/my-cycles").json()["cycles"]] == [cycle_id]
 
 
 def test_user_without_team_gets_no_access(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.login(OUTSIDER)
-    response = portal.client.get(f"/team/{cycle_id}")
-    assert response.status_code == 403
-    assert "data-employee-id" not in response.text
+    for url in (f"/api/cycles/{cycle_id}", f"/api/cycles/{cycle_id}/employees"):
+        response = portal.get(url)
+        assert response.status_code == 403 and "Fake" not in response.text
 
 
-def test_manager_cannot_open_hr_pages(uploaded) -> None:
+def test_manager_cannot_use_hr_endpoints(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.login(MANAGER_ONE)
-    for url in ("/hr", "/hr/upload", f"/hr/cycles/{cycle_id}", f"/hr/cycles/{cycle_id}/employees",
-                f"/hr/cycles/{cycle_id}/changes", f"/hr/cycles/{cycle_id}/changes.csv", f"/hr/cycles/{cycle_id}/exceptions.csv"):
-        assert portal.client.get(url).status_code == 403, url
-    assert portal.post(f"/hr/cycles/{cycle_id}/download").status_code == 403
-    assert portal.post(f"/hr/cycles/{cycle_id}/status", action="lock").status_code == 403
+    for url in ("/api/cycles", f"/api/cycles/{cycle_id}/managers", f"/api/cycles/{cycle_id}/exceptions",
+                f"/api/cycles/{cycle_id}/exceptions.csv", f"/api/cycles/{cycle_id}/changes",
+                f"/api/cycles/{cycle_id}/changes.csv", f"/api/cycles/{cycle_id}/download"):
+        assert portal.get(url).status_code == 403, url
+    assert portal.post(f"/api/cycles/{cycle_id}/status", {"action": "lock"}).status_code == 403
+    assert portal.post(f"/api/cycles/{cycle_id}/emails").status_code == 403
+    assert portal.put(f"/api/cycles/{cycle_id}/deadline", {"deadline": "2099-01-01"}).status_code == 403
 
 
-def test_hr_sees_everyone(uploaded) -> None:
+def test_hr_sees_everyone_and_can_filter(uploaded) -> None:
     portal, cycle_id = uploaded
-    assert grid_ids(portal.client.get(f"/hr/cycles/{cycle_id}/employees").text) == TEAM_ONE | TEAM_TWO
-    filtered = portal.client.get(f"/hr/cycles/{cycle_id}/employees", params={"manager": MANAGER_TWO})
-    assert grid_ids(filtered.text) == TEAM_TWO
+    assert team_ids(portal, cycle_id) == TEAM_ONE | TEAM_TWO
+    assert team_ids(portal, cycle_id, manager=MANAGER_TWO) == TEAM_TWO
+    assert team_ids(portal, cycle_id, department="Dept M1") == TEAM_ONE
+    employee = portal.get(f"/api/cycles/{cycle_id}/employees").json()["employees"][0]
+    assert employee["manager_email"] in (MANAGER_ONE, MANAGER_TWO)
 
 
 def test_not_logged_in(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.client.cookies.clear()
-    page = portal.client.get(f"/team/{cycle_id}", follow_redirects=False)
-    assert page.status_code == 303 and page.headers["location"].startswith("/login?next=")
+    assert portal.get(f"/api/cycles/{cycle_id}/employees").status_code == 401
     assert portal.save(cycle_id, []).status_code in (401, 403)
 
 
 def test_unknown_cycle(uploaded) -> None:
     portal, _ = uploaded
-    assert portal.client.get("/team/not-an-id").status_code == 403
-    assert portal.client.get("/team/0123456789abcdef01234567").status_code == 403
+    assert portal.get("/api/cycles/not-an-id").status_code == 403
+    assert portal.get("/api/cycles/0123456789abcdef01234567").status_code == 403
 
 
 # ---------- editing ----------
@@ -145,19 +162,20 @@ def test_concurrent_edit_is_reported_not_overwritten(uploaded) -> None:
     assert portal.repo.get_employee(cycle_id, "10000001")["days"][DAY] == "P"
 
 
-def test_edited_cells_are_highlighted(uploaded) -> None:
+def test_edits_show_against_the_original(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "CO"}])
-    page = portal.client.get(f"/team/{cycle_id}").text
-    assert page.count('class="day edited"') == 1
+    emp = portal.get(f"/api/cycles/{cycle_id}/employees").json()["employees"][0]
+    assert (emp["days"][DAY], emp["original_days"][DAY], emp["calculated_days"][DAY]) == ("CO", "A", "A")
+    assert emp["schedule"][DAY] == "6DAG" and emp["worked_seconds"][DAY] == 17999
 
 
 def test_csrf_is_required(uploaded) -> None:
     portal, cycle_id = uploaded
     no_token = portal.client.post(f"/api/cycles/{cycle_id}/changes", json={"changes": []})
     wrong = portal.client.post(f"/api/cycles/{cycle_id}/changes", json={"changes": []}, headers={"X-CSRF-Token": "wrong"})
-    form = portal.client.post(f"/hr/cycles/{cycle_id}/status", data={"action": "lock"})
-    assert (no_token.status_code, wrong.status_code, form.status_code) == (403, 403, 403)
+    lock = portal.client.post(f"/api/cycles/{cycle_id}/status", json={"action": "lock"})
+    assert (no_token.status_code, wrong.status_code, lock.status_code) == (403, 403, 403)
     assert portal.repo.get_cycle(cycle_id)["status"] == "open"
 
 
@@ -165,20 +183,25 @@ def test_csrf_is_required(uploaded) -> None:
 
 def test_locked_cycle_blocks_everyone(uploaded) -> None:
     portal, cycle_id = uploaded
-    assert portal.post(f"/hr/cycles/{cycle_id}/status", action="lock").status_code == 303
+    assert portal.post(f"/api/cycles/{cycle_id}/status", {"action": "lock"}).json()["status"] == "locked"
     assert portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "P"}]).status_code == 403
     portal.login(MANAGER_ONE)
-    page = portal.client.get(f"/team/{cycle_id}").text
-    assert "HR has locked this cycle" in page and "<select" not in page
+    cycle = portal.get(f"/api/cycles/{cycle_id}").json()
+    assert cycle["can_edit"] is False and "HR has locked this cycle" in cycle["read_only_reason"]
     assert portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "P"}]).status_code == 403
 
 
 def test_unlock_reopens(uploaded) -> None:
     portal, cycle_id = uploaded
-    portal.post(f"/hr/cycles/{cycle_id}/status", action="lock")
-    portal.post(f"/hr/cycles/{cycle_id}/status", action="unlock")
+    portal.post(f"/api/cycles/{cycle_id}/status", {"action": "lock"})
+    portal.post(f"/api/cycles/{cycle_id}/status", {"action": "unlock"})
     portal.login(MANAGER_ONE)
     assert portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "P"}]).status_code == 200
+
+
+def test_bad_status_action_is_rejected(uploaded) -> None:
+    portal, cycle_id = uploaded
+    assert portal.post(f"/api/cycles/{cycle_id}/status", {"action": "explode"}).status_code == 422
 
 
 def test_deadline_passed_blocks_managers_not_hr(uploaded) -> None:
@@ -186,14 +209,22 @@ def test_deadline_passed_blocks_managers_not_hr(uploaded) -> None:
     portal.repo.set_cycle_fields(cycle_id, {"correction_deadline": now_utc() - timedelta(minutes=1)})
     assert portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "P"}]).status_code == 200  # HR
     portal.login(MANAGER_ONE)
-    assert "deadline" in portal.client.get(f"/team/{cycle_id}").text
+    assert "deadline" in portal.get(f"/api/cycles/{cycle_id}").json()["read_only_reason"]
     response = portal.save(cycle_id, [{"employee_id": "10000002", "date": DAY, "value": "CO"}])
     assert response.status_code == 403 and "deadline" in response.json()["error"]
 
 
+def test_set_and_remove_deadline(uploaded) -> None:
+    portal, cycle_id = uploaded
+    cycle = portal.put(f"/api/cycles/{cycle_id}/deadline", {"deadline": "2099-12-31"}).json()
+    assert cycle["deadline_date"] == "2099-12-31" and cycle["correction_deadline"].startswith("2099-12-31T18:29:59")
+    assert portal.put(f"/api/cycles/{cycle_id}/deadline", {"deadline": "31/12/2099"}).status_code == 400
+    assert portal.put(f"/api/cycles/{cycle_id}/deadline", {"deadline": None}).json()["deadline_date"] is None
+
+
 def test_future_deadline_allows_managers(uploaded) -> None:
     portal, cycle_id = uploaded
-    portal.post(f"/hr/cycles/{cycle_id}/deadline", deadline="2099-12-31")
+    portal.put(f"/api/cycles/{cycle_id}/deadline", {"deadline": "2099-12-31"})
     portal.login(MANAGER_ONE)
     assert portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "P"}]).status_code == 200
 
@@ -203,15 +234,15 @@ def test_new_upload_replaces_old_version(uploaded, make_workbook) -> None:
     new_id = portal.upload(make_workbook())
     assert portal.repo.get_cycle(new_id)["active"] and not portal.repo.get_cycle(old_id)["active"]
     portal.login(MANAGER_ONE)
-    assert portal.client.get("/", follow_redirects=False).headers["location"] == f"/team/{new_id}"
-    assert "replaced by a newer version" in portal.client.get(f"/team/{old_id}").text
+    assert [c["id"] for c in portal.get("/api/my-cycles").json()["cycles"]] == [new_id]
+    assert "replaced by a newer version" in portal.get(f"/api/cycles/{old_id}").json()["read_only_reason"]
     assert portal.save(old_id, [{"employee_id": "10000001", "date": DAY, "value": "P"}]).status_code == 403
 
 
 def test_hr_can_reactivate_old_version(uploaded, make_workbook) -> None:
     portal, old_id = uploaded
     new_id = portal.upload(make_workbook())
-    portal.post(f"/hr/cycles/{old_id}/status", action="activate")
+    portal.post(f"/api/cycles/{old_id}/status", {"action": "activate"})
     assert portal.repo.get_cycle(old_id)["active"] and not portal.repo.get_cycle(new_id)["active"]
 
 
@@ -220,16 +251,23 @@ def test_hr_can_reactivate_old_version(uploaded, make_workbook) -> None:
 def test_change_history_and_csv(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "CO"}], comment="=HYPERLINK(evil)")
-    page = portal.client.get(f"/hr/cycles/{cycle_id}/changes")
-    assert "21/09/2026" in page.text and "CO" in page.text
-    csv_text = portal.client.get(f"/hr/cycles/{cycle_id}/changes.csv").text
+    [change] = portal.get(f"/api/cycles/{cycle_id}/changes").json()["changes"]
+    assert (change["employee_name"], change["date"], change["old_value"], change["new_value"]) == \
+        ("Fake Employee A", DAY, "A", "CO")
+    csv_text = portal.get(f"/api/cycles/{cycle_id}/changes.csv").text
     assert "10000001" in csv_text and "21/09/2026" in csv_text
     assert "'=HYPERLINK(evil)" in csv_text  # protected against CSV formula injection
-    assert portal.client.get(f"/hr/cycles/{cycle_id}/changes.csv", params={"employee": "10000002"}).text.count("\n") == 1
+    assert portal.get(f"/api/cycles/{cycle_id}/changes.csv", employee="10000002").text.count("\n") == 1
+    assert portal.get(f"/api/cycles/{cycle_id}/changes", changed_by="someone@else.com").json()["changes"] == []
 
 
-def test_review_counts_changes_per_manager(uploaded) -> None:
+def test_managers_list_counts_changes(uploaded) -> None:
     portal, cycle_id = uploaded
     portal.save(cycle_id, [{"employee_id": "10000001", "date": DAY, "value": "CO"},
                            {"employee_id": "10000002", "date": DAY, "value": "CO"}])
-    assert portal.repo.change_counts_by_manager(cycle_id) == {MANAGER_ONE: 2}
+    data = portal.get(f"/api/cycles/{cycle_id}/managers").json()
+    by_email = {m["manager_email"]: m for m in data["managers"]}
+    assert by_email[MANAGER_ONE]["changes"] == 2 and by_email[MANAGER_ONE]["team_size"] == 3
+    assert by_email[MANAGER_TWO]["email_status"] is None
+    assert data["departments"] == ["Dept M1", "Dept M2"]
+    assert HR not in by_email

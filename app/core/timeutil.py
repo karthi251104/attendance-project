@@ -26,14 +26,6 @@ def end_of_day_utc(day: date, tz_name: str) -> datetime:
     return datetime.combine(day, time(23, 59, 59), tzinfo=ZoneInfo(tz_name)).astimezone(timezone.utc)
 
 
-def fmt_date(value: date | datetime | str | None) -> str:
-    if value is None or value == "":
-        return ""
-    if isinstance(value, str):
-        value = date.fromisoformat(value[:10])
-    return value.strftime("%d/%m/%Y")
-
-
 def fmt_datetime(value: datetime | None, tz_name: str) -> str:
     if value is None:
         return ""

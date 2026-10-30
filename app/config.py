@@ -6,6 +6,7 @@ as Python lists through small helper properties, which keeps the .env format sim
 """
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -47,6 +48,13 @@ class Settings(BaseSettings):
 
     session_hours: int = 8
     email_per_second: float = 2
+
+    # Folder with the built React app (index.html + assets). Empty = frontend/dist in the repo.
+    frontend_dist: str = ""
+
+    @property
+    def frontend_dist_path(self) -> Path:
+        return Path(self.frontend_dist) if self.frontend_dist else Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
     @property
     def allowed_status_list(self) -> list[str]:

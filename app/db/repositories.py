@@ -20,7 +20,7 @@ def _oid(value: str) -> ObjectId | None:
 
 
 def _with_id(doc: dict | None) -> dict | None:
-    """Add a string `id` field next to Mongo's ObjectId `_id`, for templates."""
+    """Add a string `id` field next to Mongo's ObjectId `_id`, for the API."""
     if doc is not None:
         doc["id"] = str(doc["_id"])
     return doc

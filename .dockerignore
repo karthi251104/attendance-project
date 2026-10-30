@@ -1,0 +1,22 @@
+# Only what the image needs goes into the build context. Never real workbooks or secrets.
+**/.git
+**/.github
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/node_modules
+frontend/dist
+.env
+.env.*
+!.env.example
+*.xlsm
+*.xlsx
+*.xls
+*.csv
+.claude
+tests
+scripts
+docs
+infra

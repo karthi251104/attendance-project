@@ -124,3 +124,30 @@ This replaces decisions 4, 5, 6, 9, 12, 14, 15 and 17, the `GRID_SOURCE` setting
     `TO CONSIDER`, cleared SAP Remarks, ran the app and compared with the macro's file: 96 employees in the same
     order, 4,896 TO CONSIDER cells (cached VLOOKUP and COUNTIF values compared with the app's values) and 57,622
     SAP cells, 0 differences. The VBA project and the 22 other parts were identical.
+
+## React frontend, Docker and deploys (30/10/2026)
+
+The user chose a React web app (not React Native), GitHub Actions, and one Docker container on App Service.
+
+42. **One origin, one container.** FastAPI serves the built React app (`app/spa.py`) next to `/api` and `/auth`.
+    No CORS, one URL, the session cookie and CSRF work as before. Unknown paths return `index.html` so React
+    Router handles `/hr`, `/team/<id>` on reload. Hashed `/assets/*` are cached for a year, everything else `no-store`.
+43. **The Jinja pages are gone**, replaced by a JSON API (`app/routes/cycles.py`, `app/routes/auth.py`) and
+    `app/views.py` (what each screen receives). The server-side rules did not change: `core/editing.py` still
+    decides who may see and edit what. Managers no longer receive `manager_email` in the grid data.
+44. **Sign-in:** `GET /api/session` tells the app who is signed in and gives the CSRF token. Entra sign-in stays a
+    browser redirect (`/auth/login` → Microsoft → `/auth/callback`); errors come back as `/login?error=…`.
+    Sign-out returns the URL to go to (Microsoft's sign-out page with Entra).
+45. **Download is a GET** (`/api/cycles/{id}/download`), so the browser shows its own download progress. It
+    changes nothing, so it needs no CSRF token; the SameSite=Lax cookie keeps other sites from reading it.
+46. **Frontend stack:** React 18, TypeScript (strict), Vite, React Router 6, TanStack Query, lucide icons and
+    the Inter font served from the app (the CSP allows nothing from other sites). One hand-written stylesheet with
+    design tokens instead of a CSS framework. The grid edits in memory and saves all changes in one request.
+47. **Container:** `python:3.12-slim`, non-root user, gunicorn with `uvicorn-worker` (the `uvicorn.workers`
+    module is deprecated), `forwarded_allow_ips="*"` because App Service terminates HTTPS. `tzdata` is a
+    dependency so time zones work on any base image.
+48. **Deploys:** `deploy.yml` reuses `ci.yml`, then builds and pushes to Azure Container Registry and points the
+    Web App at the image tagged with the commit SHA (easy roll back). Azure sign-in uses OpenID Connect; no Azure
+    password is stored in GitHub. The deploy job is skipped until `AZURE_WEBAPP_NAME` is set.
+49. **Docker could not be run on the development PC**, so the image is first built and started in CI (the
+    smoke test runs it against a MongoDB service and checks `/healthz`, the React page and the API).

@@ -1,17 +1,24 @@
-"""Read the uploaded attendance workbook.
+"""Read the uploaded attendance workbook and work out the TO CONSIDER sheet.
 
-Only the `TO CONSIDER` and `SAP` sheets are read. `HC_Teamlease` is never
-touched: openpyxl in read-only mode parses a sheet only when it is iterated, so
-opening the file does not load it.
+HR uploads the file straight from SAP, before the macro has run. It has two sheets:
+  SAP           one row per employee per day (schedule and worked hours)
+  HC_Teamlease  the headcount report (joining date, status, department, manager, ...)
 
-This module only *reads*; turning the data into the grid and the exceptions
-report happens in `app/core/grid.py`.
+The macro builds TO CONSIDER from them, and so does the app:
+  - one row per employee in SAP, sorted by Employee ID (the macro's pivot table),
+  - Employee ID and Name from SAP,
+  - C-L looked up in HC_Teamlease by Employee ID, and the manager's email and status
+    looked up by Manager ID (the macro's VLOOKUPs),
+  - one column per SAP date, from column M.
+The macro's column D (a lookup into another workbook) is not built.
+
+This module only *reads*; turning the data into the grid and the exceptions report
+happens in `app/core/grid.py`, and writing the sheet in `app/core/workbook_writer.py`.
 """
 
 import io
-import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import BinaryIO
 
@@ -22,27 +29,40 @@ from app.core.rules import to_seconds
 
 TO_CONSIDER_SHEET = "TO CONSIDER"
 SAP_SHEET = "SAP"
+HC_SHEET = "HC_TEAMLEASE"
 HEADER_ROW = 1
+
+# What Excel's VLOOKUP shows when the Employee ID or Manager ID is not in HC_Teamlease.
+NOT_FOUND = "#N/A"
 
 # Cached values Excel writes for failed formulas; treated as "missing".
 ERROR_VALUES = {"#N/A", "#REF!", "#VALUE!", "#NAME?", "#DIV/0!", "#NUM!", "#NULL!", "#SPILL!", "#CALC!"}
 
-# TO CONSIDER identity columns, found by header name.
-TC_FIELDS = {
-    "employee id": "employee_id",
-    "employee name": "employee_name",
-    "doj": "doj",
-    "emp status": "emp_status",
-    "lwd": "lwd",
-    "department": "department",
-    "parent org": "parent_org",
-    "emp email id": "emp_email",
-    "manager id": "manager_id",
-    "manager name": "manager_name",
-    "manager email": "manager_email",
-    "manager status": "manager_status",
-}
-TC_REQUIRED = ["employee id", "employee name", "manager name", "manager email"]
+# TO CONSIDER columns A-L, in order: (header, where the value comes from).
+# "sap" = the SAP sheet, "hc" = HC_Teamlease row of the employee, "manager" = HC_Teamlease row of the manager.
+TC_COLUMNS = [
+    ("Employee ID", "sap", "employee id"),
+    ("Employee Name", "sap", "employee name"),
+    ("DOJ", "hc", "joining date"),
+    ("Emp Status", "hc", "employment status"),
+    ("LWD", "hc", "relieving date"),
+    ("Department", "hc", "department"),
+    ("Parent Org", "hc", "parent org unit"),
+    ("Emp Email ID", "hc", "email id"),
+    ("Manager ID", "hc", "rep. mgr emp no."),
+    ("Manager Name", "hc", "rep. manager name"),
+    ("Manager Email", "manager", "email id"),
+    ("Manager Status", "manager", "employment status"),
+]
+DATE_COLUMNS = {"DOJ", "LWD"}  # shown with a date format
+FIRST_DATE_COLUMN = len(TC_COLUMNS) + 1  # M
+
+# Total columns after the dates: (header, status counted). None = SUM of the counts.
+TOTAL_COLUMNS = [
+    ("Present", "P"), ("Absent", "A"), ("Weekly Off", "OFF"), ("Comp Off", "CO"),
+    ("Maternity Leave", "ML"), ("Maternity Leave", "PL"), ("PH", "PH"), ("Total", None),
+]
+REMARKS_HEADER = "Remarks"  # an empty column after the totals, for HR
 
 SAP_REQUIRED = {
     "employee id": "employee_id",
@@ -52,23 +72,13 @@ SAP_REQUIRED = {
     "worked hours": "worked_hours",
 }
 
-# Status counted by each total column, by header, for uploads where the total formulas
-# are still empty. The two "Maternity Leave" columns count ML and then PL.
-TOTAL_HEADER_CODES = {
-    "present": ["P"], "absent": ["A"], "weekly off": ["OFF"], "comp off": ["CO"],
-    "maternity leave": ["ML", "PL"], "paternity leave": ["PL"], "ph": ["PH"], "total": [None],
-}
-
 # SAP columns the macro fills with formulas (empty in the file HR uploads).
 SAP_OUTPUT_COLUMNS = {"remarks": "remarks", "remarks code": "remarks_code"}
 
-# The first date column is N (14) in the current file; dates are never searched before it.
-FIRST_DATE_COLUMN = 14
+HC_KEY = "employee id"
+HC_REQUIRED = sorted({source for _, kind, source in TC_COLUMNS if kind != "sap"} | {HC_KEY})
 
-_COUNTIF_CODE = re.compile(r'COUNTIF\s*\([^,]+,\s*"([^"]*)"\s*\)', re.IGNORECASE)
 _TEXT_DATE_FORMATS = ("%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y", "%Y-%m-%d")
-
-MISSING_CACHE_MESSAGE = "Please open the file in Excel, save it, and upload again."
 
 
 class WorkbookError(Exception):
@@ -92,7 +102,6 @@ class TotalColumn:
     letter: str
     header: str
     code: str | None  # status counted by COUNTIF, or None for Total (SUM)
-    has_formula: bool  # False when the cell is still empty and the app must write the formula
 
 
 @dataclass
@@ -104,7 +113,6 @@ class SheetLayout:
     # SAP column letters by field: employee_id, date, work_schedule, worked_hours, remarks, remarks_code
     sap_columns: dict[str, str] = field(default_factory=dict)
     sap_last_row: int = 0
-    employee_id_column: str = "A"
 
     @property
     def counted_statuses(self) -> set[str]:
@@ -113,11 +121,14 @@ class SheetLayout:
 
 @dataclass
 class EmployeeRow:
-    """One TO CONSIDER row."""
+    """One TO CONSIDER row, as the app will write it."""
 
     employee_id: str
     employee_name: str
     row_number: int
+    in_hc: bool
+    # The values of columns A-L exactly as they go into the sheet (NOT_FOUND where VLOOKUP fails).
+    sheet_cells: list[object]
     doj: date | None
     emp_status: str | None
     lwd: date | None
@@ -128,7 +139,6 @@ class EmployeeRow:
     manager_name: str | None
     manager_email: str | None
     manager_status: str | None
-    days: dict[str, str | None]  # ISO date -> status in the sheet (None = empty cell)
 
 
 @dataclass
@@ -142,9 +152,7 @@ class WorkbookData:
     dates: list[date]
     layout: SheetLayout
     employees: list[EmployeeRow]
-    sap_present: bool
     sap_days: dict[tuple[str, str], SapDay]  # (employee id, ISO date) -> day
-    sap_names: dict[str, str]  # employee id -> name, for employees found in SAP
     issues: list[Issue] = field(default_factory=list)
 
 
@@ -216,213 +224,154 @@ def parse_date(value: object) -> date | None:
     return None
 
 
-def normalize_status(value: object) -> str | None:
-    text = clean_text(value)
-    return text.upper() if text else None
+def sheet_value(value: object) -> object:
+    """A cell value as it will be written into TO CONSIDER (and stored in MongoDB).
+
+    Numbers stay numbers, dates become datetimes (BSON has no date type), text is trimmed
+    and empty cells become None.
+    """
+    if value is None or isinstance(value, (bool, int, float, datetime)):
+        return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)
+    if isinstance(value, time):
+        return value.strftime("%H:%M:%S")
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)  # IDs exported as text, like the macro's Text to Columns
+    return text or None
 
 
 # ---------- workbook loading ----------
 
-def _open(source: Path | str | bytes | BinaryIO, data_only: bool):
+def _open(source: Path | str | bytes | BinaryIO):
     if isinstance(source, bytes):
         source = io.BytesIO(source)
     elif hasattr(source, "seek"):
         source.seek(0)
     try:
-        return load_workbook(source, read_only=True, data_only=data_only, keep_links=False)
+        return load_workbook(source, read_only=True, data_only=True, keep_links=False)
     except Exception as exc:  # openpyxl raises several types for bad files
         raise WorkbookError("This file could not be opened as an Excel workbook (.xlsm or .xlsx).") from exc
 
 
 def _find_sheet(wb, wanted: str):
     for name in wb.sheetnames:
-        if name.strip().upper() == wanted:
+        if name.strip().upper() == wanted.upper():
             return wb[name]
     return None
 
 
 def read_workbook(source: Path | str | bytes | BinaryIO) -> WorkbookData:
-    """Read SAP and TO CONSIDER from the workbook. Raises WorkbookError for fatal problems."""
-    values_wb = _open(source, data_only=True)
+    """Read SAP and HC_Teamlease and work out TO CONSIDER. Raises WorkbookError for fatal problems."""
+    wb = _open(source)
     try:
-        tc_sheet = _find_sheet(values_wb, TO_CONSIDER_SHEET)
-        if tc_sheet is None:
+        if _find_sheet(wb, TO_CONSIDER_SHEET) is not None:
             raise WorkbookError(
-                "The workbook has no 'TO CONSIDER' sheet. Please check that you uploaded the attendance "
-                "workbook downloaded from SAP."
+                "This workbook already has a 'TO CONSIDER' sheet. Please upload the file from SAP before the "
+                "macro has run, with only the 'SAP' and 'HC_Teamlease' sheets."
             )
-        tc_rows = list(tc_sheet.iter_rows(min_row=HEADER_ROW, values_only=True))
-        sap_sheet = _find_sheet(values_wb, SAP_SHEET)
-        sap_rows = list(sap_sheet.iter_rows(min_row=HEADER_ROW, values_only=True)) if sap_sheet else None
+        sap_sheet = _find_sheet(wb, SAP_SHEET)
+        hc_sheet = _find_sheet(wb, HC_SHEET)
+        missing = [name for name, sheet in (("SAP", sap_sheet), ("HC_Teamlease", hc_sheet)) if sheet is None]
+        if missing:
+            raise WorkbookError(
+                f"The workbook has no {' or '.join(repr(name) for name in missing)} sheet. Please check that you "
+                "uploaded the attendance workbook downloaded from SAP."
+            )
+        sap_rows = list(sap_sheet.iter_rows(min_row=HEADER_ROW, values_only=True))
+        hc_people = _read_hc(hc_sheet)
     finally:
-        values_wb.close()
+        wb.close()
 
     issues: list[Issue] = []
-    header = tc_rows[0] if tc_rows else ()
-    field_columns = _find_tc_columns(header)
-    dates, date_indexes = _find_date_columns(header, start=max(field_columns.values()) + 1)
-    total_columns = _read_total_columns(source, header, after=date_indexes[-1] + 1)
-    employees = _read_tc_employees(tc_rows[1:], field_columns, dates, date_indexes, issues)
+    sap_days, sap_names, sap_columns, sap_last_row = _read_sap(sap_rows, issues)
+    if not sap_names:
+        raise WorkbookError("The 'SAP' sheet has no employee rows.")
 
+    dates = sorted({date.fromisoformat(iso) for _, iso in sap_days})
+    employees = _build_employees(sap_names, hc_people, issues)
+    after_dates = FIRST_DATE_COLUMN + len(dates)
     layout = SheetLayout(
         header_row=HEADER_ROW,
-        date_columns={d.isoformat(): get_column_letter(i + 1) for d, i in zip(dates, date_indexes)},
+        date_columns={d.isoformat(): get_column_letter(FIRST_DATE_COLUMN + i) for i, d in enumerate(dates)},
         employee_rows={e.employee_id: e.row_number for e in employees},
-        total_columns=total_columns,
-        employee_id_column=get_column_letter(field_columns["employee_id"] + 1),
+        total_columns=[TotalColumn(get_column_letter(after_dates + i), header, code)
+                       for i, (header, code) in enumerate(TOTAL_COLUMNS)],
+        sap_columns=sap_columns,
+        sap_last_row=sap_last_row,
     )
-
-    sap_days: dict[tuple[str, str], SapDay] = {}
-    sap_names: dict[str, str] = {}
-    if sap_rows is not None:
-        sap_days, sap_names, layout.sap_columns, layout.sap_last_row = _read_sap(sap_rows, issues)
-
-    return WorkbookData(
-        dates=dates,
-        layout=layout,
-        employees=employees,
-        sap_present=sap_rows is not None,
-        sap_days=sap_days,
-        sap_names=sap_names,
-        issues=issues,
-    )
+    return WorkbookData(dates=dates, layout=layout, employees=employees, sap_days=sap_days, issues=issues)
 
 
-# ---------- TO CONSIDER ----------
+# ---------- HC_Teamlease ----------
 
-def _find_tc_columns(header: tuple) -> dict[str, int]:
-    """Map our field names to 0-based column indexes, by header name."""
-    by_name: dict[str, int] = {}
-    for index, cell in enumerate(header[: FIRST_DATE_COLUMN - 1]):
+def _read_hc(sheet) -> dict[str, dict[str, object]]:
+    """Employee ID -> {HC header: value} for the columns TO CONSIDER needs. The first row wins, like VLOOKUP."""
+    header = next(sheet.iter_rows(min_row=HEADER_ROW, max_row=HEADER_ROW, values_only=True), ())
+    columns: dict[str, int] = {}
+    for index, cell in enumerate(header):
         key = normalize_header(cell)
-        if key in TC_FIELDS and key not in by_name:
-            by_name[key] = index
-    missing = [name for name in TC_REQUIRED if name not in by_name]
+        if key in HC_REQUIRED and key not in columns:
+            columns[key] = index
+    missing = [name for name in HC_REQUIRED if name not in columns]
     if missing:
         pretty = ", ".join(f"'{name.title()}'" for name in missing)
-        raise WorkbookError(f"The 'TO CONSIDER' sheet is missing these column headers in row 1: {pretty}.")
-    return {TC_FIELDS[key]: index for key, index in by_name.items()}
+        raise WorkbookError(f"The 'HC_Teamlease' sheet is missing these column headers in row 1: {pretty}.")
+
+    # Only read as far as the last column needed: the real sheet is about 22,000 rows x 64 columns.
+    people: dict[str, dict[str, object]] = {}
+    for row in sheet.iter_rows(min_row=HEADER_ROW + 1, max_col=max(columns.values()) + 1, values_only=True):
+        emp_id = normalize_id(_cell(row, columns[HC_KEY]))
+        if emp_id is not None and emp_id not in people:
+            people[emp_id] = {name: _cell(row, index) for name, index in columns.items()}
+    return people
 
 
-def _find_date_columns(header: tuple, start: int) -> tuple[list[date], list[int]]:
-    """Find the run of date headers starting at column N (or after the last identity column)."""
-    index = max(start, FIRST_DATE_COLUMN - 1)
-    # Skip blank cells between the identity columns and the first date.
-    while index < len(header) and header[index] is None:
-        index += 1
-    dates: list[date] = []
-    indexes: list[int] = []
-    while index < len(header):
-        day = parse_date(header[index])
-        if day is None:
-            break
-        dates.append(day)
-        indexes.append(index)
-        index += 1
-    if not dates:
-        raise WorkbookError("No date columns were found in row 1 of the 'TO CONSIDER' sheet (expected from column N).")
-    if len(set(dates)) != len(dates):
-        raise WorkbookError("The 'TO CONSIDER' sheet has the same date in more than one column.")
-    return dates, indexes
+def _build_employees(sap_names: dict[str, str], hc: dict[str, dict[str, object]], issues: list[Issue]) -> list[EmployeeRow]:
+    employees: list[EmployeeRow] = []
+    for row_number, emp_id in enumerate(sorted(sap_names, key=int), start=HEADER_ROW + 1):
+        person = hc.get(emp_id)
+        manager = hc.get(normalize_id(person["rep. mgr emp no."])) if person else None
+        cells: list[object] = []
+        for _, kind, source in TC_COLUMNS:
+            if kind == "sap":
+                value = int(emp_id) if source == HC_KEY else sap_names[emp_id]
+            else:
+                found = person if kind == "hc" else manager
+                value = sheet_value(found[source]) if found else NOT_FOUND
+            cells.append(value)
 
-
-def _read_total_columns(source, header: tuple, after: int) -> list[TotalColumn]:
-    """Read the totals columns and the status code each COUNTIF counts (from the first data row's formula)."""
-    formulas_wb = _open(source, data_only=False)
-    try:
-        sheet = _find_sheet(formulas_wb, TO_CONSIDER_SHEET)
-        first_row = next(sheet.iter_rows(min_row=HEADER_ROW + 1, max_row=HEADER_ROW + 1, values_only=True), ())
-    finally:
-        formulas_wb.close()
-
-    columns: list[TotalColumn] = []
-    header_uses: dict[str, int] = {}  # how many times each header has been seen (for the two Maternity Leave columns)
-    for index in range(after, len(header)):
-        title = normalize_header(header[index])
-        if not title:
-            continue
-        formula = first_row[index] if index < len(first_row) else None
-        letter = get_column_letter(index + 1)
-        pretty = " ".join(str(header[index]).split())
-
-        if isinstance(formula, str) and formula.startswith("="):
-            # Prefer the formula: it says exactly which code is counted.
-            match = _COUNTIF_CODE.search(formula)
-            columns.append(TotalColumn(letter, pretty, match.group(1).strip().upper() if match else None, True))
-        elif title in TOTAL_HEADER_CODES:
-            # Empty cell (the usual upload): take the code from the header.
-            codes = TOTAL_HEADER_CODES[title]
-            use = header_uses.get(title, 0)
-            header_uses[title] = use + 1
-            if use < len(codes):
-                columns.append(TotalColumn(letter, pretty, codes[use], False))
-    return columns
+        values = dict(zip((header for header, _, _ in TC_COLUMNS), cells))
+        if person is None:
+            issues.append(Issue(
+                type="missing_in_hc", severity="warning", employee_id=emp_id, employee_name=sap_names[emp_id],
+                message="Employee is in SAP but not in HC_Teamlease, so DOJ, department and manager are #N/A.",
+            ))
+        employees.append(EmployeeRow(
+            employee_id=emp_id,
+            employee_name=sap_names[emp_id],
+            row_number=row_number,
+            in_hc=person is not None,
+            sheet_cells=cells,
+            doj=parse_date(values["DOJ"]),
+            emp_status=clean_text(values["Emp Status"]),
+            lwd=parse_date(values["LWD"]),
+            department=clean_text(values["Department"]),
+            parent_org=clean_text(values["Parent Org"]),
+            emp_email=normalize_email(values["Emp Email ID"]),
+            manager_id=normalize_id(values["Manager ID"]),
+            manager_name=clean_text(values["Manager Name"]),
+            manager_email=normalize_email(values["Manager Email"]),
+            manager_status=clean_text(values["Manager Status"]),
+        ))
+    return employees
 
 
 def _cell(row: tuple, index: int | None) -> object:
     if index is None or index >= len(row):
         return None
     return row[index]
-
-
-def _read_tc_employees(
-    rows: list[tuple],
-    columns: dict[str, int],
-    dates: list[date],
-    date_indexes: list[int],
-    issues: list[Issue],
-) -> list[EmployeeRow]:
-    employees: list[EmployeeRow] = []
-    seen: set[str] = set()
-    manager_email_cached = False
-
-    for row_number, row in enumerate(rows, start=HEADER_ROW + 1):
-        if all(value is None for value in row):
-            continue
-        emp_id = normalize_id(_cell(row, columns["employee_id"]))
-        if emp_id is None:
-            issues.append(Issue(
-                type="invalid_employee_id", severity="warning",
-                message=f"Row {row_number} of TO CONSIDER has no valid Employee ID and was skipped.",
-            ))
-            continue
-        if emp_id in seen:
-            issues.append(Issue(
-                type="duplicate_employee", severity="error", employee_id=emp_id,
-                message=f"Employee ID appears more than once in TO CONSIDER (row {row_number} was skipped).",
-            ))
-            continue
-        seen.add(emp_id)
-
-        raw_manager_email = _cell(row, columns["manager_email"])
-        if raw_manager_email is not None:
-            manager_email_cached = True
-
-        get = lambda name: _cell(row, columns.get(name))  # noqa: E731 - short local helper
-        lwd = get("lwd")
-        employees.append(EmployeeRow(
-            employee_id=emp_id,
-            employee_name=clean_text(get("employee_name")) or "",
-            row_number=row_number,
-            doj=parse_date(get("doj")),
-            emp_status=clean_text(get("emp_status")),
-            lwd=parse_date(lwd),
-            department=clean_text(get("department")),
-            parent_org=clean_text(get("parent_org")),
-            emp_email=normalize_email(get("emp_email")),
-            manager_id=normalize_id(get("manager_id")),
-            manager_name=clean_text(get("manager_name")),
-            manager_email=normalize_email(raw_manager_email),
-            manager_status=clean_text(get("manager_status")),
-            days={day.isoformat(): normalize_status(_cell(row, i)) for day, i in zip(dates, date_indexes)},
-        ))
-
-    if employees and not manager_email_cached:
-        # Formula columns without cached values: the file was produced by a tool, not saved by Excel.
-        raise WorkbookError(MISSING_CACHE_MESSAGE)
-    if not employees:
-        raise WorkbookError("The 'TO CONSIDER' sheet has no employee rows.")
-    return employees
 
 
 # ---------- SAP ----------

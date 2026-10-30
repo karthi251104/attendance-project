@@ -1,13 +1,13 @@
 """Generate a FAKE attendance workbook with the same layout as the real SAP export.
 
-No real employee data is used. The workbook has the sheets TO CONSIDER, SAP and a
-small HC_Teamlease, the same headers, date columns and COUNTIF total formulas.
-The TO CONSIDER date cells are filled using the same rules as the macro, so a
-default workbook has 0 mismatches between SAP and TO CONSIDER.
+No real employee data is used. By default the workbook is what HR uploads: the sheets
+SAP and HC_Teamlease, with the SAP Remarks / Remarks Code cells still empty. HC_Teamlease
+has the real headers in the real column positions; only the columns TO CONSIDER needs
+are filled.
 
-`as_uploaded=True` gives the file the way HR uploads it: all headers are there, but the
-TO CONSIDER day cells and total formulas and the SAP Remarks / Remarks Code cells are
-empty (the macro fills those).
+`with_to_consider=True` gives the file *after* the macro has run: a TO CONSIDER sheet
+(with the macro's extra column D) and the SAP Remarks formulas. openpyxl cannot store a
+formula together with its cached value, so TO CONSIDER holds the VLOOKUP results as values.
 
 Keyword options let tests create broken or unusual variants.
 
@@ -33,13 +33,15 @@ MANAGERS = {
 
 # (employee id, name, manager key, 5DAG or 6DAG, emp status, lwd, emp email)
 EMPLOYEES = [
-    (10000001, "Fake Employee A", "M1", "6DAG", "Active", 0, "emp.a@example.com"),
-    (10000002, "Fake Employee B", "M1", "6DAG", "Active", 0, None),
-    (10000003, "Fake Employee C", "M1", "5DAG", "Withdrawn", date(2026, 10, 10), "emp.c@example.com"),
-    (10000004, "Fake Employee D", "M2", "6DAG", "Active", 0, "emp.d@example.com"),
-    (10000005, "Fake Employee E", "M2", "5DAG", "Active", 0, "emp.e@example.com"),
-    (10000006, "Fake Employee F", "M2", "6DAG", "Active", 0, "emp.f@example.com"),
+    (10000001, "Fake Employee A", "M1", "6DAG", "Active", None, "emp.a@example.com"),
+    (10000002, "Fake Employee B", "M1", "6DAG", "Active", None, None),
+    (10000003, "Fake Employee C", "M1", "5DAG", "Withdrawn", datetime(2026, 10, 10), "emp.c@example.com"),
+    (10000004, "Fake Employee D", "M2", "6DAG", "Active", None, "emp.d@example.com"),
+    (10000005, "Fake Employee E", "M2", "5DAG", "Active", None, "emp.e@example.com"),
+    (10000006, "Fake Employee F", "M2", "6DAG", "Active", None, "emp.f@example.com"),
 ]
+NOT_IN_HC = (10000088, "Fake Only In SAP")
+DOJ = datetime(2024, 1, 15)
 
 # Worked-hours pattern, including the rule boundaries.
 WORKED_PATTERN = [
@@ -59,12 +61,27 @@ SAP_HEADERS = [
     "Shortfall Hours", "Extra Hours", "Remarks", "Remarks\nCode",
 ]
 
-TC_HEADERS = [
+# The real HC_Teamlease headers, A to BL.
+HC_HEADERS = [
+    "Employee ID", "Full Name", "International worker", "Employment Status", "Employment Type", "Level",
+    "Joining Date", "Group DOJ", "Date of birth", "Probation Extension Date", "Confirmation Date", "Relieving Date",
+    "Reason for Leaving", "Level - DOJ", "Designation - DOJ", "Last Promotion Year", "Serving Notice Period",
+    "Consultancy Name", "STA / PDF", "Position ID", "Current Designation", "Role Specification", "Department",
+    "Dept. Short Text", "Parent Org Unit", "Operating Unit", "Division", "Function", "Gender",
+    "Work schedule (5/6 Days)", "Personnel area", "Personnel Area Text", "Personnel subarea", "Pers. subarea text",
+    "Cost Center", "Cost Center Description", "HRBP", "Shift Marker", "Physical Location", "Attendace Location",
+    "System ID", "Email ID", "Rep. Mgr Emp No.", "Rep. Manager Name", "RM1 Level", "Rep. Mgr 2 Emp No.",
+    "Rep. Manager 2 Name", "RM2 Level", "Section Head Emp No.", "Section Head Name", "Section Head Level",
+    "OU Head Employee No.", "OU Head Name", "OU Level", "Marital Status", "Mobile Number", "Highest Qualification",
+    "Years of Experience Prior to Syngene", "Years of Experience in Syngene", "Total Years of Experience",
+    "Transfer Date", "Reason for Transfer", "Payroll Blocked", "SBP",
+]
+
+# The macro's TO CONSIDER, with its column D (a lookup into another workbook).
+MACRO_TC_HEADERS = [
     "Employee ID", "Employee Name", "DOJ", None, "Emp Status", "LWD", "Department", "Parent Org",
     "Emp Email ID", "Manager ID", "Manager Name", "Manager Email", "Manager Status",
 ]
-
-# (header, code counted) for the columns after the dates. None = not a COUNTIF.
 TOTAL_COLUMNS = [
     ("Present", "P"), ("Absent", "A"), ("Weekly Off", "OFF"), ("Comp Off", "CO"),
     ("Maternity Leave", "ML"), ("Maternity Leave", "PL"), ("PH", "PH"), ("Total", None), ("Remarks", None),
@@ -102,137 +119,139 @@ def as_cell_value(worked: timedelta, variant: int) -> object:
     return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"  # text
 
 
+def hc_records(employees: list[list]) -> list[dict[str, object]]:
+    """HC_Teamlease rows (by header) for the employees and their managers."""
+    records = []
+    for emp_id, name, mgr_key, _, status, lwd, email in employees:
+        mgr = MANAGERS[mgr_key]
+        records.append({
+            "Employee ID": emp_id, "Full Name": name, "Employment Status": status, "Joining Date": DOJ,
+            "Relieving Date": lwd, "Department": f"Dept {mgr_key}", "Parent Org Unit": "Fake Org", "Email ID": email,
+            "Rep. Mgr Emp No.": mgr["id"], "Rep. Manager Name": mgr["name"],
+        })
+    for key, mgr in MANAGERS.items():
+        records.append({
+            "Employee ID": mgr["id"], "Full Name": mgr["name"], "Employment Status": mgr["status"],
+            "Joining Date": DOJ, "Department": f"Dept {key}", "Parent Org Unit": "Fake Org", "Email ID": mgr["email"],
+        })
+    return records
+
+
 def make_sample_workbook(
     path: Path | str,
     *,
     start: date = DEFAULT_START,
     num_days: int = 30,
-    text_date_headers: bool = False,
-    formulas_only: bool = False,
     include_sap: bool = True,
-    include_to_consider: bool = True,
-    old_macro_codes: bool = False,
+    include_hc: bool = True,
+    with_to_consider: bool = False,
     text_ids: bool = False,
-    as_uploaded: bool = False,
-    tc_overrides: dict[tuple[int, date], str | None] | None = None,
     sap_overrides: dict[tuple[int, date], tuple[str, timedelta]] | None = None,
     drop_sap_rows: set[tuple[int, date]] | None = None,
-    extra_sap_dates: list[date] | None = None,
-    extra_sap_employee: bool = False,
-    extra_tc_employee: bool = False,
-    employee_overrides: dict[int, dict[str, object]] | None = None,
+    employee_not_in_hc: bool = False,
+    hc_overrides: dict[int, dict[str, object]] | None = None,
+    hc_missing_header: str | None = None,
 ) -> Path:
-    """Write a fake workbook to `path` and return the path."""
-    tc_overrides = tc_overrides or {}
+    """Write a fake workbook to `path` and return the path.
+
+    hc_overrides: {employee or manager id: {HC_Teamlease header: value}}.
+    """
     sap_overrides = sap_overrides or {}
     drop_sap_rows = drop_sap_rows or set()
-    employee_overrides = employee_overrides or {}
+    hc_overrides = hc_overrides or {}
     dates = [start + timedelta(days=i) for i in range(num_days)]
     thresholds = Thresholds()
-
     employees = [list(e) for e in EMPLOYEES]
-    if extra_tc_employee:
-        employees.append([10000099, "Fake Only In TC", "M2", "6DAG", "Active", 0, "only.tc@example.com"])
+    as_id = (lambda value: str(value)) if text_ids else (lambda value: value)  # noqa: E731 - small local helper
 
-    # 1. Per employee-day: schedule, worked hours, status.
+    # 1. Per employee-day: schedule and worked hours.
     sap_days: dict[tuple[int, date], tuple[str, timedelta]] = {}
     for index, (emp_id, _, _, base, *_rest) in enumerate(employees):
-        if emp_id == 10000099:
-            continue  # this employee exists only in TO CONSIDER
         for d_index, day in enumerate(dates):
             sap_days[(emp_id, day)] = (default_schedule(base, day), WORKED_PATTERN[(index + d_index) % len(WORKED_PATTERN)])
+    sap_employees = [(e[0], e[1]) for e in employees]
+    if employee_not_in_hc:
+        sap_employees.append(NOT_IN_HC)
+        for day in dates:
+            sap_days[(NOT_IN_HC[0], day)] = ("6DAG", timedelta(hours=9))
     sap_days.update(sap_overrides)
 
     wb = Workbook()
     wb.remove(wb.active)
 
-    # 2. TO CONSIDER sheet.
-    if include_to_consider:
-        ws = wb.create_sheet("TO CONSIDER")
-        date_headers = [day.strftime("%d-%m-%Y") if text_date_headers else datetime(day.year, day.month, day.day) for day in dates]
-        ws.append(TC_HEADERS + date_headers + [header for header, _ in TOTAL_COLUMNS])
-        first_date_col = len(TC_HEADERS) + 1
-        first_letter = get_column_letter(first_date_col)
-        last_letter = get_column_letter(first_date_col + num_days - 1)
-
-        for row_number, (emp_id, name, mgr_key, _, status, lwd, email) in enumerate(employees, start=2):
-            mgr = dict(MANAGERS[mgr_key])
-            fields = {
-                "Employee ID": f"{emp_id}" if text_ids else emp_id,
-                "Employee Name": name, "DOJ": datetime(2024, 1, 15), "Display": "#N/A",
-                "Emp Status": status, "LWD": lwd, "Department": f"Dept {mgr_key}", "Parent Org": "Fake Org",
-                "Emp Email ID": email, "Manager ID": mgr["id"], "Manager Name": mgr["name"],
-                "Manager Email": mgr["email"], "Manager Status": mgr["status"],
-            }
-            fields.update(employee_overrides.get(emp_id, {}))
-            row: list[object] = list(fields.values())
-            if formulas_only:
-                # Columns C-M as formulas with no cached values (as if never opened in Excel).
-                row[2:] = [f"=VLOOKUP($A{row_number},HC_Teamlease!$A:$M,{col},0)" for col in range(3, 14)]
-
-            for day in dates:
-                if as_uploaded and (emp_id, day) not in tc_overrides:
-                    row.append(None)  # the macro has not filled the days yet
-                elif (emp_id, day) in tc_overrides:
-                    row.append(tc_overrides[(emp_id, day)])
-                elif (emp_id, day) in sap_days:
-                    schedule, worked = sap_days[(emp_id, day)]
-                    status_code = calculate_status(schedule, int(worked.total_seconds()), thresholds)
-                    row.append("P" if status_code == "?" else status_code)
-                else:
-                    row.append("P")
-
-            span = f"{first_letter}{row_number}:{last_letter}{row_number}"
-            total_letters = []
-            for col_offset, (header, code) in enumerate(TOTAL_COLUMNS):
-                letter = get_column_letter(first_date_col + num_days + col_offset)
-                if as_uploaded:
-                    row.append(None)  # the macro writes the total formulas
-                elif code is not None:
-                    if old_macro_codes and code == "ML":
-                        code = "MTL"
-                    row.append(f'=COUNTIF({span},"{code}")')
-                    total_letters.append(letter)
-                elif header == "Total":
-                    row.append(f"=SUM({total_letters[0]}{row_number}:{total_letters[-1]}{row_number})")
-                else:
-                    row.append(None)
-            ws.append(row)
-
-    # 3. SAP sheet (one row per employee per day).
+    # 2. SAP sheet (one row per employee per day).
     if include_sap:
         ws = wb.create_sheet("SAP")
         ws.append(SAP_HEADERS)
-        sap_employees = [(e[0], e[1]) for e in employees if e[0] != 10000099]
-        if extra_sap_employee:
-            sap_employees.append((10000088, "Fake Only In SAP"))
-            for day in dates:
-                sap_days[(10000088, day)] = ("6DAG", timedelta(hours=9))
         for emp_id, name in sap_employees:
-            emp_dates = dates + [d for d in (extra_sap_dates or [])]
-            for d_index, day in enumerate(emp_dates):
+            for d_index, day in enumerate(dates):
                 if (emp_id, day) in drop_sap_rows:
                     continue
-                schedule, worked = sap_days.get((emp_id, day), ("6DAG", timedelta(hours=9)))
+                schedule, worked = sap_days[(emp_id, day)]
                 excel_row = ws.max_row + 1
                 ws.append([
-                    emp_id, name, "Fake Org Unit", "Associate", "L1", datetime(day.year, day.month, day.day),
+                    as_id(emp_id), name, "Fake Org Unit", "Associate", "L1", datetime(day.year, day.month, day.day),
                     schedule, None, time(9), time(18), None, None, None, None, None, None,
                     time(9), as_cell_value(worked, d_index % 4), None, None,
                     # Remarks columns: the macro's formulas (empty in the uploaded file). The app never reads them.
-                    None if as_uploaded else remarks_formula(excel_row, numeric=True),
-                    None if as_uploaded else remarks_formula(excel_row, numeric=False),
+                    remarks_formula(excel_row, numeric=True) if with_to_consider else None,
+                    remarks_formula(excel_row, numeric=False) if with_to_consider else None,
                 ])
 
-    # 4. A small HC_Teamlease sheet (the real one is huge and must never be loaded).
-    ws = wb.create_sheet("HC_Teamlease")
-    ws.append(["Employee ID", "Employee Name", "Some Column"])
-    for emp_id, name, *_ in employees:
-        ws.append([emp_id, name, "x"])
+    # 3. HC_Teamlease sheet.
+    records = hc_records(employees)
+    for record in records:
+        record.update(hc_overrides.get(record["Employee ID"], {}))
+    if include_hc:
+        ws = wb.create_sheet("HC_Teamlease")
+        headers = [h for h in HC_HEADERS if h != hc_missing_header]
+        ws.append(headers)
+        for record in records:
+            row = [record.get(header) for header in headers]
+            row[0] = as_id(row[0])
+            if "Rep. Mgr Emp No." in headers and row[headers.index("Rep. Mgr Emp No.")] is not None:
+                row[headers.index("Rep. Mgr Emp No.")] = as_id(row[headers.index("Rep. Mgr Emp No.")])
+            ws.append(row)
+
+    # 4. The macro's TO CONSIDER (only for files on which the macro has run).
+    if with_to_consider:
+        _add_macro_to_consider(wb, sap_employees, records, dates, sap_days, thresholds)
+        wb.move_sheet("TO CONSIDER", offset=-(len(wb.sheetnames) - 1))
 
     path = Path(path)
     wb.save(path)
     return path
+
+
+def _add_macro_to_consider(wb, sap_employees, records, dates, sap_days, thresholds) -> None:
+    ws = wb.create_sheet("TO CONSIDER")
+    ws.append(MACRO_TC_HEADERS + [datetime(d.year, d.month, d.day) for d in dates] + [h for h, _ in TOTAL_COLUMNS])
+    hc = {record["Employee ID"]: record for record in records}
+    first_date_col = len(MACRO_TC_HEADERS) + 1
+    span_first, span_last = get_column_letter(first_date_col), get_column_letter(first_date_col + len(dates) - 1)
+
+    for row_number, (emp_id, name) in enumerate(sorted(sap_employees), start=2):
+        person = hc.get(emp_id)
+        manager = hc.get(person.get("Rep. Mgr Emp No.")) if person else None
+
+        def look(record, header):
+            return "#N/A" if record is None else (record.get(header) if record.get(header) is not None else 0)
+
+        row: list[object] = [
+            emp_id, name, look(person, "Joining Date"), "#N/A", look(person, "Employment Status"),
+            look(person, "Relieving Date"), look(person, "Department"), look(person, "Parent Org Unit"),
+            look(person, "Email ID"), look(person, "Rep. Mgr Emp No."), look(person, "Rep. Manager Name"),
+            look(manager, "Email ID"), look(manager, "Employment Status"),
+        ]
+        for day in dates:
+            schedule, worked = sap_days[(emp_id, day)]
+            row.append(calculate_status(schedule, int(worked.total_seconds()), thresholds))
+        span = f"{span_first}{row_number}:{span_last}{row_number}"
+        totals = [f'=COUNTIF({span},"{code}")' for _, code in TOTAL_COLUMNS if code]
+        first_total = get_column_letter(first_date_col + len(dates))
+        last_total = get_column_letter(first_date_col + len(dates) + len(totals) - 1)
+        row += totals + [f"=SUM({first_total}{row_number}:{last_total}{row_number})"]
+        ws.append(row)
 
 
 if __name__ == "__main__":

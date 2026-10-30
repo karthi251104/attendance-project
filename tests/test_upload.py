@@ -1,5 +1,7 @@
 """Phase 2: upload pipeline and HR screens."""
 
+from datetime import date
+
 import pytest
 
 from app.core.processing import process_upload
@@ -13,15 +15,16 @@ def test_upload_saves_cycle_employees_and_exceptions(uploaded) -> None:
     assert cycle["name"] == "20 Sep 2026 - 19 Oct 2026"
     assert cycle["status"] == "open" and cycle["active"] is True
     assert len(cycle["dates"]) == 30
-    assert cycle["stats"] == {"employees": 6, "managers": 2, "exceptions": 1, "mismatches": 0, "filled_from_sap": 180}
-    assert cycle["sheet_layout"]["date_columns"]["2026-09-20"] == "N"
+    assert cycle["stats"] == {"employees": 6, "managers": 2, "exceptions": 1, "filled_from_sap": 180}
+    assert cycle["sheet_layout"]["date_columns"]["2026-09-20"] == "M"
     assert cycle["sheet_layout"]["sap_columns"]["remarks"] == "U"
     assert portal.files.load(cycle["original_file_blob"])[:2] == b"PK"
 
     employees = portal.repo.list_employees(cycle_id)
     assert len(employees) == 6
     emp = portal.repo.get_employee(cycle_id, "10000001")
-    assert emp["days"]["2026-09-21"] == "A" and emp["sheet_days"]["2026-09-21"] is None
+    assert emp["days"]["2026-09-21"] == "A" and emp["sheet_cells"][0] == 10000001
+    assert emp["doj"].date() == date(2024, 1, 15)
     assert emp["worked_seconds"]["2026-09-21"] == 17999 and emp["schedule"]["2026-09-21"] == "6DAG"
     assert portal.repo.get_employee(cycle_id, "10000004")["manager_email"] == "manager.two@example.com"
     assert [e["type"] for e in portal.repo.list_exceptions(cycle_id)] == ["empty_emp_email"]
@@ -29,7 +32,7 @@ def test_upload_saves_cycle_employees_and_exceptions(uploaded) -> None:
 
 def test_deadline_is_end_of_day_in_ist(portal, make_workbook) -> None:
     portal.login(HR)
-    cycle_id = portal.upload(make_workbook(as_uploaded=True), deadline="2026-11-05")
+    cycle_id = portal.upload(make_workbook(), deadline="2026-11-05")
     deadline = portal.repo.get_cycle(cycle_id)["correction_deadline"]
     assert deadline.isoformat().startswith("2026-11-05T18:29:59")  # 23:59:59 IST
 
@@ -53,8 +56,8 @@ def test_exceptions_csv(uploaded) -> None:
 
 @pytest.mark.parametrize("options, filename, message", [
     ({}, "notes.txt", "Please upload an Excel workbook"),
-    ({"include_to_consider": False}, None, "TO CONSIDER&#39; sheet. Please check that you uploaded"),
-    ({"formulas_only": True}, None, "Please open the file in Excel, save it, and upload again."),
+    ({"include_hc": False}, None, "HC_Teamlease&#39; sheet. Please check that you uploaded"),
+    ({"with_to_consider": True}, None, "already has a &#39;TO CONSIDER&#39; sheet"),
 ])
 def test_bad_uploads_show_clear_errors(portal, make_workbook, options, filename, message) -> None:
     portal.login(HR)

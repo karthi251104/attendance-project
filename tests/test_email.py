@@ -45,8 +45,7 @@ def test_email_content(uploaded) -> None:
 def test_invalid_manager_email_is_logged_as_failed(portal, make_workbook) -> None:
     from tests.conftest import HR
     portal.login(HR)
-    cycle_id = portal.upload(make_workbook(as_uploaded=True, employee_overrides={
-        10000001: {"Manager Email": "not-an-email"}}))
+    cycle_id = portal.upload(make_workbook(hc_overrides={20000001: {"Email ID": "not-an-email"}}))
     portal.post(f"/hr/cycles/{cycle_id}/emails")
     log = portal.repo.latest_email_by_manager(cycle_id)
     assert log["not-an-email"]["status"] == "failed"

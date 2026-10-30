@@ -30,7 +30,6 @@
   <div class="stat"><span class="stat-value">{{ cycle.stats.managers }}</span><span class="stat-label">Managers</span></div>
   <div class="stat"><span class="stat-value">{{ cycle.stats.exceptions }}</span><span class="stat-label">Exceptions</span></div>
   <div class="stat"><span class="stat-value">{{ cycle.stats.filled_from_sap }}</span><span class="stat-label">Days filled from SAP</span></div>
-  <div class="stat"><span class="stat-value">{{ cycle.stats.mismatches }}</span><span class="stat-label">SAP vs sheet differences</span></div>
 </div>
 
 <section class="card">
@@ -114,6 +113,6 @@
   </table>
   </div>
   {% if exception_total > exceptions|length %}<p class="muted">Showing the first {{ exceptions|length }}. Download the CSV for all of them.</p>{% endif %}
-  {% else %}<p>No exceptions. SAP and TO CONSIDER are consistent.</p>{% endif %}
+  {% else %}<p>No exceptions. Every employee was found in HC_Teamlease and every day could be calculated.</p>{% endif %}
 </section>
 {% endblock %}

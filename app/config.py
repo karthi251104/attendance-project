@@ -42,7 +42,6 @@ class Settings(BaseSettings):
     ph_min_hours: float = 5
 
     allowed_statuses: str = "P,A,OFF,PH,CO,ML,PL"
-    grid_source: Literal["to_consider", "sap"] = "to_consider"
     timezone: str = "Asia/Kolkata"
     max_upload_mb: int = 25
 

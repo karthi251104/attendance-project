@@ -53,7 +53,6 @@ def layout_to_doc(cycle: CycleData) -> dict:
         "total_columns": [asdict(col) for col in layout.total_columns],
         "sap_columns": layout.sap_columns,
         "sap_last_row": layout.sap_last_row,
-        "employee_id_column": layout.employee_id_column,
     }
 
 
@@ -92,7 +91,6 @@ def process_upload(
                 "employees": len(cycle.employees),
                 "managers": len(cycle.manager_emails),
                 "exceptions": len(cycle.exceptions),
-                "mismatches": len(cycle.mismatches),
                 "filled_from_sap": cycle.filled_days,
             },
         })
@@ -106,13 +104,14 @@ def process_upload(
         files.delete(file_id)
         raise
 
-    log.info("Upload processed: cycle=%s employees=%d exceptions=%d mismatches=%d",
-             cycle_id, len(cycle.employees), len(cycle.exceptions), len(cycle.mismatches))
+    log.info("Upload processed: cycle=%s employees=%d exceptions=%d",
+             cycle_id, len(cycle.employees), len(cycle.exceptions))
     return cycle_id
 
 
 def _employee_doc(cycle_id: str, emp) -> dict:
     doc = asdict(emp)
     doc["cycle_id"] = cycle_id
+    doc["doj"] = date_to_datetime(emp.doj)
     doc["lwd"] = date_to_datetime(emp.lwd)
     return doc

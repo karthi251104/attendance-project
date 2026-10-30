@@ -88,6 +88,6 @@ def portal(portal_factory) -> Portal:
 
 @pytest.fixture
 def uploaded(portal: Portal, make_workbook) -> tuple[Portal, str]:
-    """HR has uploaded the usual (empty) workbook; returns (portal logged in as HR, cycle_id)."""
+    """HR has uploaded the usual workbook (SAP + HC_Teamlease); returns (portal logged in as HR, cycle_id)."""
     portal.login(HR)
-    return portal, portal.upload(make_workbook(as_uploaded=True))
+    return portal, portal.upload(make_workbook())

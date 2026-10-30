@@ -200,7 +200,7 @@ def test_future_deadline_allows_managers(uploaded) -> None:
 
 def test_new_upload_replaces_old_version(uploaded, make_workbook) -> None:
     portal, old_id = uploaded
-    new_id = portal.upload(make_workbook(as_uploaded=True))
+    new_id = portal.upload(make_workbook())
     assert portal.repo.get_cycle(new_id)["active"] and not portal.repo.get_cycle(old_id)["active"]
     portal.login(MANAGER_ONE)
     assert portal.client.get("/", follow_redirects=False).headers["location"] == f"/team/{new_id}"
@@ -210,7 +210,7 @@ def test_new_upload_replaces_old_version(uploaded, make_workbook) -> None:
 
 def test_hr_can_reactivate_old_version(uploaded, make_workbook) -> None:
     portal, old_id = uploaded
-    new_id = portal.upload(make_workbook(as_uploaded=True))
+    new_id = portal.upload(make_workbook())
     portal.post(f"/hr/cycles/{old_id}/status", action="activate")
     assert portal.repo.get_cycle(old_id)["active"] and not portal.repo.get_cycle(new_id)["active"]
 

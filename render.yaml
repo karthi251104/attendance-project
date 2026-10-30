@@ -1,0 +1,42 @@
+# Render Blueprint: the whole portal (React app + API) as one Docker web service.
+# Render dashboard > New > Blueprint > pick this repository. See docs/DEPLOY_RENDER.md.
+# Values marked `sync: false` are asked for once in the dashboard and never stored in Git.
+services:
+  - type: web
+    name: attendance-portal
+    runtime: docker
+    plan: free # sleeps after 15 minutes without visits; "starter" stays on
+    region: singapore # the closest Render region to India
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeployTrigger: checksPass # deploy a push to main only after GitHub Actions (CI) passes
+    envVars:
+      - key: ENV
+        value: production
+      - key: AUTH_MODE
+        value: password
+      - key: DEV_LOGIN
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: WEB_CONCURRENCY
+        value: "1" # the free plan has 512 MB of memory; one worker leaves room for large workbooks
+      - key: TIMEZONE
+        value: Asia/Kolkata
+      - key: MONGODB_URI
+        sync: false # the MongoDB Atlas connection string
+      - key: MONGODB_DB
+        value: attendance
+      - key: HR_ADMIN_EMAILS
+        sync: false
+      - key: INITIAL_HR_PASSWORD
+        sync: false
+      # Email: leave EMAIL_MODE=console to send nothing, or set smtp and the four SMTP values (e.g. Gmail).
+      - key: EMAIL_MODE
+        value: console
+      - key: SENDER_MAILBOX
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false

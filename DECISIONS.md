@@ -183,3 +183,15 @@ change it later. No emails are sent by the portal; HR sends the link and passwor
     temporary errors, gives a clear message for a refused login, and drops the spaces Google shows in App Passwords.
 59. **The email tells managers how to sign in** (their email address and the password HR gave, or the Microsoft
     account with `AUTH_MODE=entra`). Passwords are never put in emails.
+
+## Render + MongoDB Atlas for a free start (30/10/2026)
+
+60. **Render instead of Netlify:** Netlify cannot run the Python API (functions are JS/Go, about 6 MB per request,
+    10–26 s), so the whole Docker image runs as one Render web service, defined in `render.yaml`. Azure stays
+    documented for later; nothing in the code depends on the host.
+61. **`APP_BASE_URL` defaults to `RENDER_EXTERNAL_URL`** (set by Render), so the email links are right without
+    typing the address. An explicit `APP_BASE_URL` (a custom domain) still wins.
+62. **Free-plan settings:** one gunicorn worker (512 MB of memory), Singapore region (closest to India),
+    `autoDeployTrigger: checksPass` so a push deploys only after GitHub Actions passes. Atlas must allow
+    0.0.0.0/0 because free Render services have no fixed outgoing IP; the database password protects it.
+

@@ -13,6 +13,7 @@ and managers correct their own team's days. HR downloads the finished workbook.
 
 | Guide | For |
 |---|---|
+| [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md) | Quickest: Render (free) + MongoDB Atlas (free), using `render.yaml` |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Putting it on Azure: one setup script, then every push to `main` deploys |
 | [docs/TESTING.md](docs/TESTING.md) | Testing with real Microsoft sign-in and email through a dev tunnel, and the test checklist |
 | [DECISIONS.md](DECISIONS.md) | Why things are the way they are |
@@ -39,6 +40,7 @@ and managers correct their own team's days. HR downloads the finished workbook.
 | `Dockerfile`, `gunicorn.conf.py` | The production image: builds the React app, then runs the API with gunicorn |
 | `.github/workflows/` | `ci.yml` (tests, build, Docker smoke test) and `deploy.yml` (to Azure on every push to `main`) |
 | `infra/azure-setup.sh` | Creates everything in Azure once |
+| `render.yaml` | The same portal on Render (Blueprint) |
 
 ## How TO CONSIDER is built
 
@@ -170,6 +172,7 @@ All settings are environment variables (see `.env.example`). In Azure they are A
 | `SESSION_HOURS` | `8` | Sessions end this long after sign-in |
 | `WEB_CONCURRENCY` | `2` | Gunicorn workers in the container |
 | `FRONTEND_DIST` | `frontend/dist` | Where the built React app is (the image sets it) |
+| `RENDER_EXTERNAL_URL` | — | Set by Render; used as `APP_BASE_URL` when that is not set |
 
 ## API
 

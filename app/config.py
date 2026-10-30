@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -60,6 +61,15 @@ class Settings(BaseSettings):
 
     # Folder with the built React app (index.html + assets). Empty = frontend/dist in the repo.
     frontend_dist: str = ""
+
+    # Set by Render on every web service (https://<name>.onrender.com); used when APP_BASE_URL is not set.
+    render_external_url: str = ""
+
+    @model_validator(mode="after")
+    def _public_url_from_host(self) -> "Settings":
+        if "app_base_url" not in self.model_fields_set and self.render_external_url:
+            self.app_base_url = self.render_external_url
+        return self
 
     @property
     def frontend_dist_path(self) -> Path:

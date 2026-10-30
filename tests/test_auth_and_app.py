@@ -187,3 +187,12 @@ def test_spa_fallback_serves_index(portal_factory, settings, tmp_path) -> None:
 def test_unbuilt_frontend_shows_a_hint(portal_factory, settings, tmp_path) -> None:
     portal = portal_factory(settings.model_copy(update={"frontend_dist": str(tmp_path / "missing")}))
     assert "npm run build" in portal.client.get("/").text
+
+
+def test_app_base_url_comes_from_render_when_not_set(monkeypatch) -> None:
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://attendance-portal.onrender.com")
+    assert Settings(_env_file=None).app_base_url == "https://attendance-portal.onrender.com"
+    assert Settings(_env_file=None, app_base_url="https://attendance.company.com").app_base_url == "https://attendance.company.com"
+    monkeypatch.delenv("RENDER_EXTERNAL_URL")
+    assert Settings(_env_file=None).app_base_url == "http://localhost:8000"
+

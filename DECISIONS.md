@@ -95,3 +95,32 @@ Choices made where the spec left room, in the order they came up.
 32. **Security headers:** a strict CSP with no inline scripts or styles, X-Frame-Options DENY, nosniff and
     Referrer-Policy. HSTS is added in production. CSV exports escape cells that start with `= + - @`.
 33. **Logout** also signs out of Microsoft (Entra end-session endpoint) when Entra login is used.
+
+## Correction: TO CONSIDER is built by the app (30/10/2026)
+
+This replaces decisions 4, 5, 6, 9, 12, 14, 15 and 17, the `GRID_SOURCE` setting and `scripts/verify_against_macro.py`.
+
+34. **HR uploads only `SAP` and `HC_Teamlease`** (confirmed by the user, 30/10/2026). The macro creates
+    `TO CONSIDER` itself (`CreatePivotOnNewSheet`, `Manipulation_1`–`_4`), so the app does the same instead of
+    expecting the sheet. A file that already has `TO CONSIDER` is refused with a clear message.
+35. **Rows and columns follow the macro:** one row per SAP employee, sorted by Employee ID (the pivot's order);
+    one column per date found in SAP, from column M; then the totals.
+36. **Column D is dropped** (the user does not need it). In the old file it was a VLOOKUP into another workbook
+    (`[1]Sheet1`), added by hand after the macro ran. Without it, columns C–L are exactly the macro's.
+37. **HC_Teamlease columns are matched by header name**, not by the macro's fixed positions (7, 4, 12, 23, 25, 42,
+    43, 44). The first row of an Employee ID wins, as with VLOOKUP. Only the columns up to the last one needed are
+    read (about 5 s for 22,000 rows).
+38. **Values, not VLOOKUP formulas, go into C–L.** The raw export can hold IDs as text, which makes VLOOKUP fail
+    until *Text to Columns* has run. Writing values keeps the download the same as what managers saw in the portal.
+    Missing employees or managers get `#N/A` (an Excel error value, as VLOOKUP shows). Empty HC cells stay empty
+    where VLOOKUP would show 0 (or 00/01/1900 for LWD).
+39. **The totals keep the existing file's headers and codes:** Present P, Absent A, Weekly Off OFF, Comp Off CO,
+    Maternity Leave ML, Maternity Leave PL, PH, Total = SUM, and an empty Remarks column. (The macro code itself
+    still says `MTL` and has one Maternity Leave column; the sheet the user works with has ML and PL.)
+40. **Adding a sheet** edits workbook.xml (new `<sheet>`, local defined names and the active tab shifted by one),
+    its rels, `[Content_Types].xml` and styles.xml (a bold font, a thin border and four cell styles). The sheet
+    that was active stays active, so no other sheet's XML changes.
+41. **Checked against the real October 2026 workbook (30/10/2026, local only):** `scripts/side_by_side.py` deleted
+    `TO CONSIDER`, cleared SAP Remarks, ran the app and compared with the macro's file: 96 employees in the same
+    order, 4,896 TO CONSIDER cells (cached VLOOKUP and COUNTIF values compared with the app's values) and 57,622
+    SAP cells, 0 differences. The VBA project and the 22 other parts were identical.

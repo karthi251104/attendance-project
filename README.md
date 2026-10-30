@@ -1,28 +1,54 @@
 # Attendance Correction Portal
 
-HR uploads the monthly attendance workbook downloaded from SAP. The portal does the job the Excel
-macro used to do. It calculates every day from the `SAP` sheet and fills the `TO CONSIDER` sheet.
-It then emails each manager a link, and managers correct their own team's days. HR downloads the
-finished workbook.
+HR uploads the monthly attendance workbook downloaded from SAP, with the `SAP` and `HC_Teamlease`
+sheets. The portal does the job the Excel macro used to do: it builds the `TO CONSIDER` sheet from those
+two sheets and calculates every day from `SAP`. It then emails each manager a link, and managers correct
+their own team's days. HR downloads the finished workbook.
 
-- **No AI.** The status rules are a direct translation of the macro formula (`app/core/rules.py`).
-- **Checked against the real October 2026 workbook.** All 2,880 employee-days match the macro. On an
-  empty upload, the downloaded file is identical to the macro's output, cell by cell. See `DECISIONS.md`.
+- **No AI.** The status rules are a direct translation of the macro formula (`app/core/rules.py`), and
+  `TO CONSIDER` is built like the macro's pivot table and VLOOKUPs (`app/core/workbook_reader.py`).
+- **Checked against the real October 2026 workbook.** Starting from the same SAP and HC_Teamlease sheets, the
+  app's `TO CONSIDER` matches the macro's for all 96 employees (4,896 cells) and the SAP sheet matches cell
+  by cell. See `DECISIONS.md`.
+
+## How TO CONSIDER is built
+
+| Column | Comes from | Macro formula |
+|---|---|---|
+| A Employee ID, B Employee Name | one row per employee in `SAP`, sorted by Employee ID | pivot table |
+| C DOJ | `HC_Teamlease` Joining Date | `VLOOKUP(A,HC_Teamlease!A:G,7,0)` |
+| D Emp Status | Employment Status | `VLOOKUP(A,…,4,0)` |
+| E LWD | Relieving Date | `VLOOKUP(A,…,12,0)` |
+| F Department | Department | `VLOOKUP(A,…,23,0)` |
+| G Parent Org | Parent Org Unit | `VLOOKUP(A,…,25,0)` |
+| H Emp Email ID | Email ID | `VLOOKUP(A,…,42,0)` |
+| I Manager ID | Rep. Mgr Emp No. | `VLOOKUP(A,…,43,0)` |
+| J Manager Name | Rep. Manager Name | `VLOOKUP(A,…,44,0)` |
+| K Manager Email | Email ID of the **manager's** row | `VLOOKUP(I,…,42,0)` |
+| L Manager Status | Employment Status of the manager's row | `VLOOKUP(I,…,4,0)` |
+| M onwards | one column per SAP date: P / A / OFF / PH | `Remarks` 1–4 replaced by the codes |
+| after the dates | Present, Absent, Weekly Off, Comp Off, Maternity Leave (ML), Maternity Leave (PL), PH, Total, Remarks | `COUNTIF` / `SUM` |
+
+- HC_Teamlease columns are found by **header name**, so a moved column does not break the lookup.
+- The values are written, not the VLOOKUP formulas: the raw SAP export can hold IDs as text, which makes
+  Excel's VLOOKUP fail until someone runs *Text to Columns*. The app matches text and numeric IDs.
+- An employee or manager missing from HC_Teamlease gets `#N/A`, as VLOOKUP would show, and is listed in the
+  exceptions. An empty HC_Teamlease cell stays empty (VLOOKUP would show `0`).
+- The old sheet's column D (a lookup into another workbook) is not built.
 
 ## How it works
 
-1. **Upload** (HR): `.xlsm` / `.xlsx`, up to 25 MB, with an optional correction deadline. The portal reads
-   `TO CONSIDER` and `SAP` only. It never loads `HC_Teamlease`.
+1. **Upload** (HR): `.xlsm` / `.xlsx`, up to 25 MB, with an optional correction deadline. The file must have
+   `SAP` and `HC_Teamlease` and **no** `TO CONSIDER` sheet (upload it before running the macro).
 2. **Review** (HR): summary, exceptions (CSV download), managers with email status and number of changes.
 3. **Email**: one email per manager with the team size and a link. No employee data goes in the email.
 4. **Correct** (manager): the manager signs in with their Microsoft work account and sees only employees whose
    `Manager Email` is theirs. They change days and click **Save**. Every change goes into an append-only audit log.
 5. **Download** (HR): the original file with the macro's work done:
-   - the day values are written into `TO CONSIDER`,
-   - empty total cells get the `COUNTIF`/`SUM` formulas,
+   - a new `TO CONSIDER` sheet (first tab) with the current day values and the `COUNTIF`/`SUM` formulas,
    - empty SAP `Remarks` / `Remarks Code` cells get the macro's formulas.
 
-   Only those cells change. The VBA project, the other sheets and the formatting stay byte-for-byte identical.
+   The VBA project, `HC_Teamlease` and every other SAP cell stay byte-for-byte identical.
 6. **Lock** (HR) when corrections are closed.
 
 | Rule | Detail |
@@ -73,16 +99,15 @@ workbooks**: `.gitignore` blocks `*.xlsm`, `*.xlsx` and `*.csv`.
 ### Checking against a real workbook (local only)
 
 ```bash
-# 1. The rules match the macro: recalculates every day from SAP and compares with TO CONSIDER.
-.venv/bin/python -m scripts.verify_against_macro "path/to/Attendance.xlsm"
-
-# 2. Side by side: clears what the macro fills, runs the app, and compares the result with the macro's file.
+# Side by side: deletes TO CONSIDER and clears SAP Remarks, runs the app, and compares the result with the macro's file.
 .venv/bin/python -m scripts.side_by_side "path/to/Attendance.xlsm" --save-dir /some/private/folder
 ```
 
-Run both on a workbook where the macro **has already run**. Exit code 0 means identical. They print employee IDs
-and dates only, never names. Use `--save-dir` to keep the cleared upload and the app's output so you can open them
-in Excel.
+Run it on a workbook where the macro **has already run**. Exit code 0 means the same result. It prints employee
+IDs and dates only, never names. Use `--save-dir` to keep the upload copy and the app's output so you can open
+them in Excel.
+
+On Windows, also `pip install tzdata` (Windows has no built-in time zone database).
 
 ## Configuration
 
@@ -103,8 +128,7 @@ Environment variables**.
 | `EMAIL_CC` | — | Optional CC, comma-separated |
 | `EMAIL_PER_SECOND` | `2` | Throttle for Graph |
 | `WORKDAY_MIN_HOURS` / `OFFDAY_MIN_HOURS` / `PH_MIN_HOURS` | 5 / 8 / 5 | Rule thresholds |
-| `ALLOWED_STATUSES` | `P,A,OFF,PH,CO,ML,PL` | The codes the totals formulas count |
-| `GRID_SOURCE` | `to_consider` | `to_consider` keeps values already in the sheet; `sap` prefers the SAP calculation |
+| `ALLOWED_STATUSES` | `P,A,OFF,PH,CO,ML,PL` | The codes managers can choose |
 | `TIMEZONE` | `Asia/Kolkata` | For deadlines and timestamps |
 | `MAX_UPLOAD_MB` | `25` | |
 | `SESSION_HOURS` | `8` | Sessions end this long after sign-in |
@@ -192,14 +216,14 @@ and logs the reason. Check **Log stream**.
 | Path | What it does |
 |---|---|
 | `app/core/rules.py` | `to_seconds`, `calculate_status`: the macro rules |
-| `app/core/workbook_reader.py` | Reads `TO CONSIDER` and `SAP`, detects dates, totals and SAP columns |
-| `app/core/grid.py` | Grid (`days`, `original_days`, `sheet_days`, `calculated_days`) and the exceptions report |
+| `app/core/workbook_reader.py` | Reads `SAP` and `HC_Teamlease` and works out the `TO CONSIDER` rows and layout |
+| `app/core/grid.py` | Grid (`days`, `original_days`, `calculated_days`) and the exceptions report |
 | `app/core/processing.py` | Upload pipeline with rollback |
 | `app/core/editing.py` | Permission rules and saving edits with the audit log |
-| `app/core/workbook_writer.py` | Builds the download: days, totals formulas and SAP formulas |
-| `app/core/xlsx_patch.py` | Edits individual cells in the workbook XML; everything else is copied unchanged |
+| `app/core/workbook_writer.py` | Builds the download: the `TO CONSIDER` sheet and the SAP formulas |
+| `app/core/xlsx_patch.py` | Edits the workbook XML (cells, a new sheet, cell styles); everything else is copied unchanged |
 | `app/db/` | MongoDB connection, repositories, `FileStore` (GridFS) |
 | `app/email/` | Console and Graph senders, email template |
 | `app/auth/` | Session, CSRF, Entra ID login |
 | `app/routes/` | HR, team, API and auth routes |
-| `scripts/` | `verify_against_macro.py`, `side_by_side.py` |
+| `scripts/` | `side_by_side.py` |

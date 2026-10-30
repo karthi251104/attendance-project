@@ -1,11 +1,12 @@
 # Checks every push and pull request: backend tests, frontend typecheck/tests/build,
 # and the Docker image (built and started against a real MongoDB, then health-checked).
-# Pushes to main run this through the Deploy workflow instead, so it does not run twice.
+# Pushes to main run this through the Deploy workflow instead, and Dependabot branches through their
+# pull request, so nothing runs twice.
 name: CI
 
 on:
   push:
-    branches-ignore: [main]
+    branches-ignore: [main, "dependabot/**"]
   pull_request:
   workflow_call: # the deploy workflow runs this first
 

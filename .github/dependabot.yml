@@ -1,20 +1,41 @@
-# Weekly pull requests for dependency updates; CI checks each one.
+# Dependency update pull requests; CI checks each one.
+# Minor and patch updates come grouped, one pull request per ecosystem. Major versions (React, Node, ...)
+# are upgraded on purpose by a developer, not automatically.
 version: 2
 updates:
   - package-ecosystem: pip
     directory: /
     schedule: { interval: weekly }
-    open-pull-requests-limit: 5
+    groups:
+      python:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+
   - package-ecosystem: npm
     directory: /frontend
     schedule: { interval: weekly }
-    open-pull-requests-limit: 5
     groups:
       frontend:
-        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
+    groups:
+      actions:
+        patterns: ["*"]
+
   - package-ecosystem: docker
     directory: /
     schedule: { interval: monthly }
+    ignore:
+      # Stay on the long-term-support lines (Node 22, Python 3.12) until upgraded on purpose.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]

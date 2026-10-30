@@ -6,11 +6,15 @@ slicers, some conditional formatting, data-validation extensions), and has to lo
 very large HC_Teamlease sheet. Patching the XML changes only the cells we write. Every
 other zip entry, including the VBA project and all other sheets, is copied unchanged.
 
+A new sheet can be added (TO CONSIDER); that also touches workbook.xml, its rels,
+[Content_Types].xml and styles.xml (for the bold / date / border cell styles).
+
 Strings are written as inline strings (t="inlineStr"), so sharedStrings.xml is never touched.
 Formulas are written without a cached value, and the workbook is flagged to recalculate
 fully when it is opened in Excel.
 """
 
+import copy
 import posixpath
 import re
 import zipfile
@@ -24,6 +28,15 @@ REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 CALC_CHAIN_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain"
+WORKSHEET_TYPE = f"{REL_NS}/worksheet"
+WORKSHEET_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+STYLES_PATH = "xl/styles.xml"
+
+EMPTY_SHEET = (
+    f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="{NS}" xmlns:r="{REL_NS}">'
+    '<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>'
+    "<sheetData/></worksheet>"
+).encode()
 
 _REF = re.compile(r"^([A-Z]+)(\d+)$")
 _PARSER = etree.XMLParser(huge_tree=True, remove_blank_text=False, resolve_entities=False)
@@ -164,6 +177,37 @@ class SheetEditor:
         element.text = formula[1:] if formula.startswith("=") else formula
         cell.insert(0, element)
 
+    def set_number(self, ref: str, value: int | float) -> None:
+        cell = self._cell(ref, create=True)
+        self._reset(cell)
+        number = int(value) if isinstance(value, float) and value.is_integer() else value
+        etree.SubElement(cell, q("v")).text = repr(number) if isinstance(number, float) else str(number)
+
+    def set_error(self, ref: str, text: str) -> None:
+        """An error value such as #N/A, as a failed formula would show it."""
+        cell = self._cell(ref, create=True)
+        self._reset(cell)
+        cell.set("t", "e")
+        etree.SubElement(cell, q("v")).text = text
+
+    def set_style(self, ref: str, style: int) -> None:
+        """Apply a cellXfs index (from XlsxPatcher.add_style); creates the cell if needed."""
+        self._cell(ref, create=True).set("s", str(style))
+        self.changed = True
+
+    def set_column_widths(self, widths: dict[str, float]) -> None:
+        """Replace the <cols> element with one width per column letter."""
+        for old in self.root.findall(q("cols")):
+            self.root.remove(old)
+        if not widths:
+            return
+        cols = etree.Element(q("cols"))
+        for letters, width in sorted(widths.items(), key=lambda item: column_index(item[0])):
+            index = str(column_index(letters))
+            etree.SubElement(cols, q("col"), min=index, max=index, width=str(width), customWidth="1")
+        self.sheet_data.addprevious(cols)
+        self.changed = True
+
     def clear(self, ref: str) -> None:
         """Remove the value or formula but keep the cell and its style."""
         cell = self._cell(ref, create=False)
@@ -187,9 +231,17 @@ class XlsxPatcher:
         self._sheets: dict[str, SheetEditor] = {}
         self._shared_strings: list[str] | None = None
         self._sheet_paths = self._find_sheet_paths()
+        self._styles: etree._Element | None = None
+        self._style_ids: dict[object, int] = {}  # (bold, number_format, border) -> xf index, plus font/border ids
 
     def _read(self, name: str) -> bytes:
         return self._replaced.get(name) or self._zip.read(name)
+
+    def _xml(self, name: str) -> etree._Element:
+        return etree.fromstring(self._read(name), _PARSER)
+
+    def _put(self, name: str, root: etree._Element) -> None:
+        self._replaced[name] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
     def _find_sheet_paths(self) -> dict[str, str]:
         workbook = etree.fromstring(self._read("xl/workbook.xml"), _PARSER)
@@ -209,6 +261,146 @@ class XlsxPatcher:
                 raise XlsxError(f"The workbook has no '{name}' sheet")
             self._sheets[key] = SheetEditor(self._read(self._sheet_paths[key]))
         return self._sheets[key]
+
+    def has_sheet(self, name: str) -> bool:
+        return name.strip().upper() in self._sheet_paths
+
+    def add_sheet(self, name: str, position: int = 0) -> SheetEditor:
+        """Add an empty worksheet at `position` in the tab order and return its editor.
+
+        The sheet that was active stays active, so no other sheet's XML has to change.
+        """
+        key = name.strip().upper()
+        if key in self._sheet_paths:
+            raise XlsxError(f"The workbook already has a '{name}' sheet")
+        taken = set(self._zip.namelist()) | set(self._replaced)
+        number = 1
+        while f"xl/worksheets/sheet{number}.xml" in taken:
+            number += 1
+        path = f"xl/worksheets/sheet{number}.xml"
+
+        rels = self._xml("xl/_rels/workbook.xml.rels")
+        used = [int(rel.get("Id")[3:]) for rel in rels if re.fullmatch(r"rId\d+", rel.get("Id") or "")]
+        rel_id = f"rId{max(used, default=0) + 1}"
+        etree.SubElement(rels, f"{{{PKG_REL_NS}}}Relationship", Id=rel_id, Type=WORKSHEET_TYPE,
+                         Target=f"worksheets/sheet{number}.xml")
+        self._put("xl/_rels/workbook.xml.rels", rels)
+
+        workbook = self._xml("xl/workbook.xml")
+        sheets = workbook.find(q("sheets"))
+        sheet_id = max((int(s.get("sheetId")) for s in sheets), default=0) + 1
+        element = etree.Element(q("sheet"), name=name, sheetId=str(sheet_id))
+        element.set(f"{{{REL_NS}}}id", rel_id)
+        sheets.insert(position, element)
+        self._shift_sheet_indexes(workbook, position, +1)
+        self._put("xl/workbook.xml", workbook)
+
+        types = self._xml("[Content_Types].xml")
+        etree.SubElement(types, f"{{{CT_NS}}}Override", PartName=f"/{path}", ContentType=WORKSHEET_CONTENT_TYPE)
+        self._put("[Content_Types].xml", types)
+
+        self._sheet_paths[key] = path
+        editor = SheetEditor(EMPTY_SHEET)
+        editor.changed = True
+        self._sheets[key] = editor
+        return editor
+
+    def remove_sheet(self, name: str) -> None:
+        """Delete a worksheet and its relationships part. Used by the side-by-side check only."""
+        key = name.strip().upper()
+        if key not in self._sheet_paths:
+            raise XlsxError(f"The workbook has no '{name}' sheet")
+        path = self._sheet_paths.pop(key)
+        self._sheets.pop(key, None)
+
+        workbook = self._xml("xl/workbook.xml")
+        sheets = workbook.find(q("sheets"))
+        element = next(s for s in sheets if s.get("name").strip().upper() == key)
+        index, rel_id = list(sheets).index(element), element.get(f"{{{REL_NS}}}id")
+        sheets.remove(element)
+        for defined in list(workbook.iter(q("definedName"))):
+            if defined.get("localSheetId") == str(index):
+                defined.getparent().remove(defined)
+        self._shift_sheet_indexes(workbook, index + 1, -1)
+        self._put("xl/workbook.xml", workbook)
+
+        rels = self._xml("xl/_rels/workbook.xml.rels")
+        for rel in list(rels):
+            if rel.get("Id") == rel_id:
+                rels.remove(rel)
+        self._put("xl/_rels/workbook.xml.rels", rels)
+
+        types = self._xml("[Content_Types].xml")
+        for override in list(types):
+            if override.get("PartName") == f"/{path}":
+                types.remove(override)
+        self._put("[Content_Types].xml", types)
+
+        self._removed.add(path)
+        self._removed.add(posixpath.join(posixpath.dirname(path), "_rels", posixpath.basename(path) + ".rels"))
+        self.drop_calc_chain()
+
+    @staticmethod
+    def _shift_sheet_indexes(workbook: etree._Element, start: int, delta: int) -> None:
+        """Sheet-position references (local defined names, active and first tab) at or after `start` move by `delta`."""
+        for defined in workbook.iter(q("definedName")):
+            local = defined.get("localSheetId")
+            if local is not None and int(local) >= start:
+                defined.set("localSheetId", str(int(local) + delta))
+        for view in workbook.iter(q("workbookView")):
+            for attribute in ("activeTab", "firstSheet"):
+                value = int(view.get(attribute, "0"))
+                if value >= start:
+                    view.set(attribute, str(max(value + delta, 0)))
+
+    def add_style(self, *, bold: bool = False, number_format: int = 0, border: bool = False) -> int:
+        """Return a cellXfs index for this combination, adding it to styles.xml the first time.
+
+        number_format is a built-in format id (14 = short date).
+        """
+        key = (bold, number_format, border)
+        if key in self._style_ids:
+            return self._style_ids[key]
+        if self._styles is None:
+            if STYLES_PATH not in self._zip.namelist():
+                raise XlsxError("The workbook has no styles part")
+            self._styles = self._xml(STYLES_PATH)
+        root = self._styles
+        font_id = self._bold_font_id(root) if bold else 0
+        border_id = self._thin_border_id(root) if border else 0
+
+        xfs = root.find(q("cellXfs"))
+        xf = etree.SubElement(xfs, q("xf"), numFmtId=str(number_format), fontId=str(font_id), fillId="0",
+                              borderId=str(border_id), xfId="0")
+        for flag, attribute in ((number_format, "applyNumberFormat"), (bold, "applyFont"), (border, "applyBorder")):
+            if flag:
+                xf.set(attribute, "1")
+        xfs.set("count", str(len(xfs.findall(q("xf")))))
+        self._style_ids[key] = len(xfs.findall(q("xf"))) - 1
+        return self._style_ids[key]
+
+    def _bold_font_id(self, root: etree._Element) -> int:
+        if "bold_font" not in self._style_ids:
+            fonts = root.find(q("fonts"))
+            font = copy.deepcopy(fonts.findall(q("font"))[0])  # the workbook's default font, made bold
+            for old in font.findall(q("b")):
+                font.remove(old)
+            font.insert(0, etree.Element(q("b")))
+            fonts.append(font)
+            fonts.set("count", str(len(fonts.findall(q("font")))))
+            self._style_ids["bold_font"] = len(fonts.findall(q("font"))) - 1
+        return self._style_ids["bold_font"]
+
+    def _thin_border_id(self, root: etree._Element) -> int:
+        if "thin_border" not in self._style_ids:
+            borders = root.find(q("borders"))
+            border = etree.SubElement(borders, q("border"))
+            for side in ("left", "right", "top", "bottom"):
+                etree.SubElement(etree.SubElement(border, q(side), style="thin"), q("color"), indexed="64")
+            etree.SubElement(border, q("diagonal"))
+            borders.set("count", str(len(borders.findall(q("border")))))
+            self._style_ids["thin_border"] = len(borders.findall(q("border"))) - 1
+        return self._style_ids["thin_border"]
 
     def cell_text(self, sheet_name: str, ref: str) -> str | None:
         """The displayed text of a value cell (numbers as written in the XML, shared strings resolved)."""
@@ -262,7 +454,10 @@ class XlsxPatcher:
         for key, editor in self._sheets.items():
             if editor.changed:
                 self._replaced[self._sheet_paths[key]] = editor.to_bytes()
+        if self._styles is not None:
+            self._put(STYLES_PATH, self._styles)
         out = BytesIO()
+        existing = set(self._zip.namelist())
         with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as target:
             for info in self._zip.infolist():
                 if info.filename in self._removed:
@@ -271,4 +466,7 @@ class XlsxPatcher:
                 if data is None:
                     data = self._zip.read(info.filename)
                 target.writestr(info, data, compress_type=info.compress_type)
+            for name, data in self._replaced.items():  # new parts, such as an added sheet
+                if name not in existing:
+                    target.writestr(name, data)
         return out.getvalue()

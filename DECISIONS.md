@@ -175,3 +175,11 @@ change it later. No emails are sent by the portal; HR sends the link and passwor
     password at startup. It never changes an existing login, so it can stay set.
 57. **Not forced to change the password** on first sign-in, as the user asked; the Password page is always
     available.
+
+## Email through SMTP (30/10/2026)
+
+58. **`EMAIL_MODE=smtp`** sends through any SMTP server with STARTTLS (Gmail, Outlook.com, a company server), so
+    "Email all managers" works without Microsoft 365 admin consent. The user tests with Gmail. It retries
+    temporary errors, gives a clear message for a refused login, and drops the spaces Google shows in App Passwords.
+59. **The email tells managers how to sign in** (their email address and the password HR gave, or the Microsoft
+    account with `AUTH_MODE=entra`). Passwords are never put in emails.

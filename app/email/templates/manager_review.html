@@ -14,6 +14,9 @@
           </td></tr>
         </table>
         <p style="margin:0 0 16px;font-size:13px;color:#5e6c84;">Or open this link: <a href="{{ link }}" style="color:#0b5cad;">{{ link }}</a></p>
+        {% if sign_in_mode == "entra" %}<p style="margin:0 0 16px;">Sign in with your company Microsoft account.</p>
+        {% else %}<p style="margin:0 0 16px;">Sign in with your email address <b>{{ manager_email }}</b> and the password HR gave you.
+          Forgot it? Ask HR to reset it.</p>{% endif %}
         {% if deadline %}<p style="margin:0 0 16px;">Corrections are open until {{ deadline }}.</p>{% endif %}
         <p style="margin:0;font-size:13px;color:#5e6c84;">This is an automated email from HR.</p>
       </td></tr>

@@ -132,3 +132,90 @@ def test_graph_throttles(monkeypatch) -> None:
     sender.send(MESSAGE)
     sender.send(MESSAGE)
     assert sleeps and 0 < sleeps[0] <= 0.5  # second email waits for the 2-per-second limit
+
+
+# ---------- SMTP sender (Gmail) ----------
+
+class FakeSMTP:
+    """Stands in for smtplib.SMTP; records what the sender does."""
+
+    instances: list["FakeSMTP"] = []
+    fail_with: list[Exception] = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host, self.port, self.calls, self.sent = host, port, [], []
+        FakeSMTP.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def starttls(self, context=None):
+        self.calls.append("starttls")
+
+    def login(self, user, password):
+        self.calls.append(("login", user))
+        assert password == "abcdefghijklmnop"  # the spaces Gmail shows are dropped
+        if FakeSMTP.fail_with:
+            raise FakeSMTP.fail_with.pop(0)
+
+    def send_message(self, mime):
+        self.sent.append(mime)
+
+
+def smtp_sender(sleeps: list[float]):
+    import smtplib  # noqa: F401 - the exceptions below come from here
+
+    from app.email.smtp_sender import SmtpSender
+
+    FakeSMTP.instances, FakeSMTP.fail_with = [], []
+    settings = Settings(_env_file=None, email_mode="smtp", sender_mailbox="hr.box@gmail.com",
+                        smtp_username="hr.box@gmail.com", smtp_password="abcd efgh ijkl mnop", email_per_second=2)
+    return SmtpSender(settings, smtp_factory=FakeSMTP, sleep=sleeps.append)
+
+
+def test_smtp_sends_html_mail_over_tls() -> None:
+    smtp_sender([]).send(MESSAGE)
+    [server] = FakeSMTP.instances
+    assert (server.host, server.port) == ("smtp.gmail.com", 587)
+    assert server.calls == ["starttls", ("login", "hr.box@gmail.com")]
+    [mime] = server.sent
+    assert (mime["From"], mime["To"], mime["Cc"], mime["Subject"]) == ("hr.box@gmail.com", "m@example.com", "c@example.com", "S")
+    assert mime.get_body(("html",)).get_content().strip() == "<p>x</p>"
+
+
+def test_smtp_wrong_password_is_a_clear_error() -> None:
+    import smtplib
+
+    sender = smtp_sender([])
+    FakeSMTP.fail_with = [smtplib.SMTPAuthenticationError(535, b"bad")]
+    with pytest.raises(SendError, match="App Password"):
+        sender.send(MESSAGE)
+
+
+def test_smtp_retries_temporary_failures() -> None:
+    import smtplib
+
+    sleeps: list[float] = []
+    sender = smtp_sender(sleeps)
+    FakeSMTP.fail_with = [smtplib.SMTPServerDisconnected("gone")]
+    sender.send(MESSAGE)
+    assert len(FakeSMTP.instances) == 2 and FakeSMTP.instances[1].sent
+    assert 2 in sleeps
+
+
+def test_smtp_settings_are_checked() -> None:
+    problems = Settings(_env_file=None, email_mode="smtp").startup_problems()
+    assert any("SENDER_MAILBOX" in p for p in problems) and any("SMTP_USERNAME" in p for p in problems)
+    ok = Settings(_env_file=None, email_mode="smtp", sender_mailbox="a@gmail.com", smtp_username="a@gmail.com", smtp_password="x")
+    assert ok.startup_problems() == []
+
+
+def test_email_explains_how_to_sign_in() -> None:
+    cycle = {"id": "abc", "name": "Cycle", "correction_deadline": None}
+    password_mail = build_message(cycle, "M", "m@example.com", 1, Settings(_env_file=None)).html_body
+    assert "m@example.com" in password_mail and "password HR gave you" in password_mail
+    entra_mail = build_message(cycle, "M", "m@example.com", 1, Settings(_env_file=None, auth_mode="entra")).html_body
+    assert "Microsoft account" in entra_mail and "password" not in entra_mail

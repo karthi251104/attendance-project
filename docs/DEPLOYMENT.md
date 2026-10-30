@@ -62,6 +62,10 @@ each manager their own. Managers can change their password after signing in; HR 
 disable a login. Five wrong passwords lock a login for 15 minutes.
 
 Emails stay off (`EMAIL_MODE=console`): HR sends managers the portal link and their password themselves.
+To let **Email all managers** really send without IT, use a mailbox's SMTP: `EMAIL_MODE=smtp`, `SENDER_MAILBOX`,
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` (for Gmail: `smtp.gmail.com`, `587` and an App Password).
+The email has the portal link and says to sign in with the email address and the password HR gave; it never
+contains a password.
 
 ## 4. Optional: Microsoft sign-in and automatic emails
 

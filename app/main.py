@@ -44,6 +44,10 @@ def make_email_sender(settings: Settings) -> EmailSender:
         from app.email.graph_sender import GraphSender
 
         return GraphSender(settings)
+    if settings.email_mode == "smtp":
+        from app.email.smtp_sender import SmtpSender
+
+        return SmtpSender(settings)
     from app.email.console_sender import ConsoleSender
 
     return ConsoleSender()

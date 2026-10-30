@@ -27,6 +27,8 @@ def build_message(cycle: dict, manager_name: str, manager_email: str, team_size:
         cycle_name=cycle["name"],
         link=f"{settings.app_base_url.rstrip('/')}/team/{cycle['id']}",
         deadline=fmt_datetime(deadline, settings.timezone) if deadline else None,
+        manager_email=manager_email,
+        sign_in_mode=settings.sign_in_mode,
     )
     return EmailMessage(
         to=manager_email,

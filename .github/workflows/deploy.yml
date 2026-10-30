@@ -35,7 +35,7 @@ jobs:
     env:
       IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/attendance-portal:${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: azure/login@v2
         with:

@@ -27,8 +27,8 @@ COPY gunicorn.conf.py ./
 COPY app ./app
 COPY --from=frontend /frontend/dist ./frontend/dist
 
-# Never run as root.
-RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin portal
+# Never run as root. The home folder is where gunicorn keeps its control socket.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin portal
 USER portal
 
 EXPOSE 8000

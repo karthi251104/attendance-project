@@ -180,6 +180,7 @@ def test_spa_fallback_serves_index(portal_factory, settings, tmp_path) -> None:
     asset = portal.client.get("/assets/app-123.js")
     assert asset.status_code == 200 and "immutable" in asset.headers["cache-control"]
     assert portal.client.get("/favicon.svg").text == "<svg/>"
+    assert portal.client.head("/").status_code == 200  # hosts such as Render probe with HEAD
     assert portal.client.get("/api/nothing-here").status_code in (401, 404)
     assert portal.client.get("/..%2F..%2Fapp%2Fconfig.py").text.startswith("<!doctype html>")
 

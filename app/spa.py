@@ -23,7 +23,7 @@ def mount_spa(app: FastAPI, dist: Path) -> None:
     if (dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
-    @app.get("/{path:path}", include_in_schema=False)
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)  # hosts probe with HEAD
     def spa(path: str, request: Request):
         if path.startswith(("api/", "auth/")) or path == "api":
             return JSONResponse({"error": "Not found."}, status_code=404)

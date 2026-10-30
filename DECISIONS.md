@@ -195,3 +195,9 @@ change it later. No emails are sent by the portal; HR sends the link and passwor
     `autoDeployTrigger: checksPass` so a push deploys only after GitHub Actions passes. Atlas must allow
     0.0.0.0/0 because free Render services have no fixed outgoing IP; the database password protects it.
 
+## Email through Brevo (30/10/2026)
+
+63. **Render's free plan blocks outgoing SMTP**: Gmail SMTP failed with `OSError` on Render (it works locally).
+    `EMAIL_MODE=brevo` sends through Brevo's HTTPS API instead (free, 300 emails a day), with the same retries
+    and throttling as the other senders. The sender address must be verified in Brevo.
+

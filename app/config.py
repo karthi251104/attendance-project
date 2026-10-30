@@ -38,9 +38,12 @@ class Settings(BaseSettings):
     entra_client_id: str = ""
     entra_client_secret: str = ""
 
-    email_mode: Literal["console", "graph", "smtp"] = "console"
+    email_mode: Literal["console", "graph", "smtp", "brevo"] = "console"
     sender_mailbox: str = ""
+    sender_name: str = "HR Attendance"
     email_cc: str = ""
+    # EMAIL_MODE=brevo (an HTTPS API; works where outgoing SMTP is blocked, e.g. Render's free plan)
+    brevo_api_key: str = ""
     # EMAIL_MODE=smtp (Gmail, Outlook.com, a company mail server)
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
@@ -105,10 +108,12 @@ class Settings(BaseSettings):
                 problems.append("ENTRA_TENANT_ID, ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET are required when AUTH_MODE=entra.")
             if not self.app_base_url.startswith("https://"):
                 problems.append("APP_BASE_URL must start with https:// in production.")
-        if self.email_mode in ("graph", "smtp") and not self.sender_mailbox:
+        if self.email_mode in ("graph", "smtp", "brevo") and not self.sender_mailbox:
             problems.append(f"SENDER_MAILBOX is required when EMAIL_MODE={self.email_mode}.")
         if self.email_mode == "smtp" and not (self.smtp_host and self.smtp_username and self.smtp_password):
             problems.append("SMTP_HOST, SMTP_USERNAME and SMTP_PASSWORD are required when EMAIL_MODE=smtp.")
+        if self.email_mode == "brevo" and not self.brevo_api_key:
+            problems.append("BREVO_API_KEY is required when EMAIL_MODE=brevo.")
         if self.email_mode == "graph" and not (self.entra_tenant_id and self.entra_client_id and self.entra_client_secret):
             problems.append("ENTRA_TENANT_ID, ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET are required when EMAIL_MODE=graph.")
         if not self.allowed_status_list:

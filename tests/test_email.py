@@ -219,3 +219,55 @@ def test_email_explains_how_to_sign_in() -> None:
     assert "m@example.com" in password_mail and "password HR gave you" in password_mail
     entra_mail = build_message(cycle, "M", "m@example.com", 1, Settings(_env_file=None, auth_mode="entra")).html_body
     assert "Microsoft account" in entra_mail and "password" not in entra_mail
+
+
+# ---------- Brevo sender (HTTPS API) ----------
+
+def brevo_sender(handler, sleeps: list[float]):
+    from app.email.brevo_sender import BrevoSender
+
+    settings = Settings(_env_file=None, email_mode="brevo", sender_mailbox="hr.box@gmail.com",
+                        brevo_api_key="xkeysib-test", email_per_second=2)
+    return BrevoSender(settings, http=httpx.Client(transport=httpx.MockTransport(handler)), sleep=sleeps.append)
+
+
+def test_brevo_sends_mail() -> None:
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json={"messageId": "<1@brevo>"})
+
+    brevo_sender(handler, []).send(MESSAGE)
+    [request] = requests
+    assert str(request.url) == "https://api.brevo.com/v3/smtp/email"
+    assert request.headers["api-key"] == "xkeysib-test"
+    body = json.loads(request.content)
+    assert body["sender"] == {"email": "hr.box@gmail.com", "name": "HR Attendance"}
+    assert body["to"] == [{"email": "m@example.com"}] and body["cc"] == [{"email": "c@example.com"}]
+    assert (body["subject"], body["htmlContent"]) == ("S", "<p>x</p>")
+
+
+def test_brevo_wrong_key_is_a_clear_error() -> None:
+    with pytest.raises(SendError, match="API key"):
+        brevo_sender(lambda request: httpx.Response(401, json={"message": "Key not found"}), []).send(MESSAGE)
+
+
+def test_brevo_unverified_sender_shows_brevos_message() -> None:
+    error = httpx.Response(400, json={"code": "invalid_parameter", "message": "Sender is not valid"})
+    with pytest.raises(SendError, match="Sender is not valid"):
+        brevo_sender(lambda request: error, []).send(MESSAGE)
+
+
+def test_brevo_retries_429_and_5xx() -> None:
+    responses = iter([httpx.Response(429, headers={"Retry-After": "3"}), httpx.Response(502), httpx.Response(201)])
+    sleeps: list[float] = []
+    brevo_sender(lambda request: next(responses), sleeps).send(MESSAGE)
+    assert 3.0 in sleeps
+
+
+def test_brevo_settings_are_checked() -> None:
+    problems = Settings(_env_file=None, email_mode="brevo").startup_problems()
+    assert any("BREVO_API_KEY" in p for p in problems) and any("SENDER_MAILBOX" in p for p in problems)
+    ok = Settings(_env_file=None, email_mode="brevo", sender_mailbox="a@gmail.com", brevo_api_key="k")
+    assert ok.startup_problems() == []

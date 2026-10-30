@@ -50,10 +50,18 @@ After that, every push to `main` deploys by itself once GitHub Actions has passe
 
 ## Emails (optional)
 
-To let **Email all managers** send, set in Render → the service → **Environment**:
-`EMAIL_MODE=smtp`, `SENDER_MAILBOX`, `SMTP_USERNAME`, `SMTP_PASSWORD` (and `SMTP_HOST` / `SMTP_PORT` if it is
-not Gmail). For Gmail, the password is an App Password (Google Account → Security → 2-Step Verification →
-App passwords). Save; Render restarts the service.
+Render's **free plan blocks outgoing SMTP** (Gmail SMTP fails with `OSError`), so use **Brevo**, which sends
+over HTTPS and is free for 300 emails a day:
+
+1. Sign up at https://www.brevo.com.
+2. **Senders, domains & dedicated IPs → Senders → Add a sender**: the HR email address. Open the confirmation
+   email Brevo sends to it and click the link.
+3. **SMTP & API → API keys → Generate a new API key**. Copy it (it is shown once).
+4. Render → the service → **Environment**: `EMAIL_MODE=brevo`, `SENDER_MAILBOX=<the verified sender>`,
+   `BREVO_API_KEY=<the key>`, optionally `SENDER_NAME=HR Attendance`. Save; Render restarts the service.
+
+On a paid Render plan, Gmail SMTP also works: `EMAIL_MODE=smtp`, `SENDER_MAILBOX`, `SMTP_USERNAME`,
+`SMTP_PASSWORD` (a Gmail App Password).
 
 ## Good to know
 

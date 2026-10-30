@@ -160,7 +160,8 @@ All settings are environment variables (see `.env.example`). In Azure they are A
 | `HR_ADMIN_EMAILS` | — | Comma-separated HR emails |
 | `INITIAL_HR_PASSWORD` | — | First password for each HR email without a login (password mode). HR changes it after signing in |
 | `ENTRA_TENANT_ID` / `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | — | Only for `AUTH_MODE=entra` or `EMAIL_MODE=graph` (see docs/DEPLOYMENT.md) |
-| `EMAIL_MODE` | `console` | `console` only prints emails; `smtp` sends through Gmail / Outlook.com / a mail server; `graph` through Microsoft 365 |
+| `EMAIL_MODE` | `console` | `console` only prints emails; `brevo` sends through Brevo's HTTPS API; `smtp` through Gmail / a mail server; `graph` through Microsoft 365 |
+| `BREVO_API_KEY` / `SENDER_NAME` | — / `HR Attendance` | For `EMAIL_MODE=brevo`. `SENDER_MAILBOX` must be a sender verified in Brevo |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | `smtp.gmail.com` / `587` / — / — | For `EMAIL_MODE=smtp`. Gmail needs an App Password (Google Account → Security → 2-Step Verification → App passwords) |
 | `SENDER_MAILBOX` | — | Mailbox the emails are sent from |
 | `EMAIL_CC` | — | Optional CC, comma-separated |

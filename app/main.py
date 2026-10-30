@@ -44,6 +44,10 @@ def make_email_sender(settings: Settings) -> EmailSender:
         from app.email.graph_sender import GraphSender
 
         return GraphSender(settings)
+    if settings.email_mode == "brevo":
+        from app.email.brevo_sender import BrevoSender
+
+        return BrevoSender(settings)
     if settings.email_mode == "smtp":
         from app.email.smtp_sender import SmtpSender
 

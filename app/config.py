@@ -26,8 +26,12 @@ class Settings(BaseSettings):
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db: str = "attendance"
 
-    dev_login: bool = False
+    # password: HR gives each person an ID (their email) and a password. entra: Microsoft sign-in.
+    auth_mode: Literal["password", "entra"] = "password"
+    dev_login: bool = False  # development only: any email, no password (overrides AUTH_MODE)
     hr_admin_emails: str = ""
+    # AUTH_MODE=password: the first password of each HR email that has no account yet (HR changes it after).
+    initial_hr_password: str = ""
 
     entra_tenant_id: str = ""
     entra_client_id: str = ""
@@ -82,15 +86,24 @@ class Settings(BaseSettings):
                 problems.append("SECRET_KEY must be a random value of at least 32 characters in production.")
             if self.mongodb_uri.startswith("mongomock://"):
                 problems.append("MONGODB_URI=mongomock:// is for local testing only.")
-            if not (self.entra_tenant_id and self.entra_client_id and self.entra_client_secret):
-                problems.append("ENTRA_TENANT_ID, ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET are required in production.")
+            if self.auth_mode == "entra" and not (self.entra_tenant_id and self.entra_client_id and self.entra_client_secret):
+                problems.append("ENTRA_TENANT_ID, ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET are required when AUTH_MODE=entra.")
             if not self.app_base_url.startswith("https://"):
                 problems.append("APP_BASE_URL must start with https:// in production.")
         if self.email_mode == "graph" and not self.sender_mailbox:
             problems.append("SENDER_MAILBOX is required when EMAIL_MODE=graph.")
+        if self.email_mode == "graph" and not (self.entra_tenant_id and self.entra_client_id and self.entra_client_secret):
+            problems.append("ENTRA_TENANT_ID, ENTRA_CLIENT_ID and ENTRA_CLIENT_SECRET are required when EMAIL_MODE=graph.")
         if not self.allowed_status_list:
             problems.append("ALLOWED_STATUSES must not be empty.")
+        if self.initial_hr_password and len(self.initial_hr_password) < 8:
+            problems.append("INITIAL_HR_PASSWORD must have at least 8 characters.")
         return problems
+
+    @property
+    def sign_in_mode(self) -> str:
+        """What the sign-in page shows: dev (email only), password or entra."""
+        return "dev" if self.dev_login else self.auth_mode
 
 
 @lru_cache

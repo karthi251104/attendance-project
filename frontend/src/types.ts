@@ -9,7 +9,7 @@ export interface User {
 export interface Session {
   user: User | null;
   csrf_token: string;
-  auth_mode: "dev" | "entra";
+  auth_mode: "dev" | "password" | "entra";
   statuses: string[];
   timezone: string;
   max_upload_mb: number;
@@ -98,4 +98,22 @@ export interface SaveResult {
   saved: number;
   unchanged: number;
   conflicts: { employee_id: string; date: string; current_value: string | null }[];
+}
+
+export interface Person {
+  email: string;
+  name: string;
+  role: "hr" | "manager";
+  has_login: boolean;
+  active: boolean;
+  locked: boolean;
+  last_login_at: string | null;
+  password_changed_at: string | null;
+}
+
+/** A login HR just created or reset: the password is shown once. */
+export interface NewLogin {
+  email: string;
+  name: string;
+  password: string;
 }

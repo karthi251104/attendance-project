@@ -49,7 +49,7 @@ class Portal:
 
     def login(self, email: str) -> None:
         self.session()
-        response = self.client.post("/api/auth/dev-login", json={"email": email}, headers={"X-CSRF-Token": self.csrf})
+        response = self.client.post("/api/auth/login", json={"email": email}, headers={"X-CSRF-Token": self.csrf})
         assert response.status_code == 200, response.text
         self.session()  # signing in starts a new session with a new token
 

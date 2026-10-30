@@ -398,3 +398,9 @@ button.cell:hover { filter: brightness(0.96); box-shadow: 0 0 0 2px var(--border
 .login-hero .hero-foot { opacity: 0.6; }
 .row.end { justify-content: flex-end; }
 .table-note { padding: 10px 16px; border-top: 1px solid var(--border); }
+.narrow { max-width: 460px; }
+.modal.wide-modal { max-width: 720px; }
+.modal .creds { max-height: 50vh; overflow: auto; margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+code.password { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; background: var(--primary-soft); color: var(--primary); padding: 3px 8px; }
+code.password { white-space: nowrap; }
+.modal { max-height: calc(100vh - 40px); overflow-y: auto; }

@@ -142,6 +142,29 @@ class Repository:
             counts[key] = counts.get(key, 0) + 1
         return counts
 
+    # ---------- portal accounts (AUTH_MODE=password) ----------
+
+    def get_account(self, email: str) -> dict | None:
+        return self.db.accounts.find_one({"email": email})
+
+    def list_accounts(self) -> list[dict]:
+        return list(self.db.accounts.find({}, {"password_hash": 0}).sort("email", ASCENDING))
+
+    def insert_account(self, doc: dict) -> None:
+        self.db.accounts.insert_one(doc)
+
+    def set_account_fields(self, email: str, fields: dict) -> bool:
+        return self.db.accounts.update_one({"email": email}, {"$set": fields}).matched_count == 1
+
+    def active_managers(self) -> dict[str, str]:
+        """Manager email -> name, for every manager in an active cycle."""
+        active = [str(c["_id"]) for c in self.db.cycles.find({"active": True}, {"_id": 1})]
+        managers: dict[str, str] = {}
+        for emp in self.db.employees.find({"cycle_id": {"$in": active}}, {"manager_email": 1, "manager_name": 1}):
+            if emp.get("manager_email"):
+                managers.setdefault(emp["manager_email"], emp.get("manager_name") or "")
+        return managers
+
     # ---------- email log ----------
 
     def insert_email_log(self, doc: dict) -> None:

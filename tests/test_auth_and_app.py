@@ -12,7 +12,8 @@ from app.routes.auth import safe_next
 from tests.conftest import HR, MANAGER_ONE
 
 PROD = dict(env="production", secret_key="x" * 40, entra_tenant_id="tid", entra_client_id="cid",
-            entra_client_secret="secret", app_base_url="https://attendance.example.com", dev_login=False)
+            entra_client_secret="secret", app_base_url="https://attendance.example.com", dev_login=False,
+            auth_mode="entra")
 
 
 def test_production_refuses_dev_login() -> None:
@@ -35,6 +36,12 @@ def test_valid_production_config_has_no_problems() -> None:
     assert Settings(_env_file=None, **PROD).startup_problems() == []
 
 
+def test_password_mode_needs_no_entra_settings() -> None:
+    settings = Settings(_env_file=None, env="production", secret_key="x" * 40, app_base_url="https://a.example.com")
+    assert settings.auth_mode == "password" and settings.startup_problems() == []
+    assert Settings(_env_file=None, initial_hr_password="short").startup_problems()
+
+
 def test_graph_mode_needs_sender_mailbox() -> None:
     assert Settings(_env_file=None, email_mode="graph").startup_problems()
 
@@ -51,17 +58,17 @@ def test_session_before_and_after_login(portal) -> None:
 
 def test_dev_login_needs_csrf_and_an_email(portal) -> None:
     portal.session()
-    assert portal.client.post("/api/auth/dev-login", json={"email": HR}).status_code == 403
-    assert portal.post("/api/auth/dev-login", {"email": "nope"}).status_code == 400
+    assert portal.client.post("/api/auth/login", json={"email": HR}).status_code == 403
+    assert portal.post("/api/auth/login", {"email": "nope"}).status_code == 400
 
 
 def test_entra_mode_redirects_and_refuses_dev_login(portal_factory, settings, monkeypatch) -> None:
     monkeypatch.setattr(entra, "start_login", lambda s: {"auth_uri": "https://login.microsoftonline.com/x/authorize", "state": "s"})
-    portal = portal_factory(settings.model_copy(update={"dev_login": False}))
+    portal = portal_factory(settings.model_copy(update={"dev_login": False, "auth_mode": "entra"}))
     assert portal.session()["auth_mode"] == "entra"
     response = portal.client.get("/auth/login", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"].startswith("https://login.microsoftonline.com/")
-    assert portal.post("/api/auth/dev-login", {"email": HR}).status_code == 403
+    assert portal.post("/api/auth/login", {"email": HR}).status_code == 403
 
 
 def test_dev_mode_login_link_goes_to_the_app_form(portal) -> None:
@@ -72,7 +79,7 @@ def test_dev_mode_login_link_goes_to_the_app_form(portal) -> None:
 def test_entra_callback_logs_user_in(portal_factory, settings, monkeypatch) -> None:
     monkeypatch.setattr(entra, "start_login", lambda s: {"auth_uri": "https://login.microsoftonline.com/x", "state": "s"})
     monkeypatch.setattr(entra, "finish_login", lambda s, flow, params: (HR, "HR Person"))
-    portal = portal_factory(settings.model_copy(update={"dev_login": False}))
+    portal = portal_factory(settings.model_copy(update={"dev_login": False, "auth_mode": "entra"}))
     portal.client.get("/auth/login?next=/hr/upload", follow_redirects=False)
     response = portal.client.get("/auth/callback?code=abc&state=s", follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/hr/upload"
@@ -86,7 +93,7 @@ def test_entra_callback_failure(portal_factory, settings, monkeypatch) -> None:
 
     monkeypatch.setattr(entra, "start_login", lambda s: {"auth_uri": "https://login.microsoftonline.com/x", "state": "s"})
     monkeypatch.setattr(entra, "finish_login", fail)
-    portal = portal_factory(settings.model_copy(update={"dev_login": False}))
+    portal = portal_factory(settings.model_copy(update={"dev_login": False, "auth_mode": "entra"}))
     portal.client.get("/auth/login", follow_redirects=False)
     response = portal.client.get("/auth/callback?error=x", follow_redirects=False)
     assert response.headers["location"] == "/login?error=Nope"
@@ -129,7 +136,7 @@ def test_logout(portal) -> None:
 
 
 def test_logout_with_entra_goes_to_microsoft(portal_factory, settings) -> None:
-    portal = portal_factory(settings.model_copy(update={"dev_login": False, "entra_tenant_id": "tid"}))
+    portal = portal_factory(settings.model_copy(update={"dev_login": False, "auth_mode": "entra", "entra_tenant_id": "tid"}))
     portal.session()
     redirect = portal.post("/api/auth/logout").json()["redirect"]
     assert redirect.startswith("https://login.microsoftonline.com/tid/oauth2/v2.0/logout?post_logout_redirect_uri=")

@@ -1,4 +1,4 @@
-import { Mail } from "lucide-react";
+import { KeyRound, Mail } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { api, links } from "../api";
@@ -15,17 +15,18 @@ export function LoginPage() {
   const [params] = useSearchParams();
   const next = safeNext(params.get("next"));
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState(params.get("error"));
   const [busy, setBusy] = useState(false);
 
   if (session.user) return <Navigate to={next} replace />;
 
-  async function devSignIn(event: FormEvent) {
+  async function signIn(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api.devLogin(email);
+      await api.login(email, password);
       await refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -53,7 +54,9 @@ export function LoginPage() {
       <main className="login-panel">
         <div className="login-card">
           <h2>Sign in</h2>
-          <p className="muted">Use your company Microsoft account.</p>
+          <p className="muted">
+            {session.auth_mode === "entra" ? "Use your company Microsoft account." : "Use the email and password HR gave you."}
+          </p>
           <div className="stack">
             {error && <Alert tone="error">{error}</Alert>}
             {session.auth_mode === "entra" ? (
@@ -62,17 +65,32 @@ export function LoginPage() {
                 Sign in with Microsoft
               </a>
             ) : (
-              <form className="stack" onSubmit={devSignIn}>
-                <Alert tone="warn">Development sign-in: any email works, no password. This is never available in production.</Alert>
+              <form className="stack" onSubmit={signIn}>
+                {session.auth_mode === "dev" && (
+                  <Alert tone="warn">Development sign-in: any email works, no password. This is never available in production.</Alert>
+                )}
                 <label className="field">
                   <span>Work email</span>
                   <div className="input-icon">
                     <Mail aria-hidden />
-                    <input className="input" type="email" required autoFocus value={email} placeholder="name@company.com"
-                           onChange={(e) => setEmail(e.target.value)} />
+                    <input className="input" type="email" required autoFocus autoComplete="username" value={email}
+                           placeholder="name@company.com" onChange={(e) => setEmail(e.target.value)} />
                   </div>
                 </label>
+                {session.auth_mode === "password" && (
+                  <label className="field">
+                    <span>Password</span>
+                    <div className="input-icon">
+                      <KeyRound aria-hidden />
+                      <input className="input" type="password" required autoComplete="current-password" value={password}
+                             onChange={(e) => setPassword(e.target.value)} />
+                    </div>
+                  </label>
+                )}
                 <button className="btn primary lg block" disabled={busy}>{busy && <Spinner />}Sign in</button>
+                {session.auth_mode === "password" && (
+                  <p className="muted small">Forgot your password? Ask HR to reset it.</p>
+                )}
               </form>
             )}
           </div>

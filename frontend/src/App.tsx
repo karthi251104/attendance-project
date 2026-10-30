@@ -1,11 +1,13 @@
 import { Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { AttendancePage } from "./pages/Attendance";
+import { ChangePasswordPage } from "./pages/ChangePassword";
 import { ChangesPage } from "./pages/Changes";
 import { CycleReviewPage } from "./pages/CycleReview";
 import { HomePage, NotFoundPage } from "./pages/Home";
 import { HrCyclesPage } from "./pages/HrCycles";
 import { LoginPage } from "./pages/Login";
+import { LoginsPage } from "./pages/Logins";
 import { UploadPage } from "./pages/Upload";
 import { RequireUser } from "./session";
 
@@ -21,6 +23,8 @@ export function App() {
       <Route path="/hr/cycles/:cycleId" element={<RequireUser hr>{(user) => <Layout user={user}><CycleReviewPage /></Layout>}</RequireUser>} />
       <Route path="/hr/cycles/:cycleId/employees" element={<RequireUser hr>{(user) => <Layout user={user} wide><AttendancePage hrView /></Layout>}</RequireUser>} />
       <Route path="/hr/cycles/:cycleId/changes" element={<RequireUser hr>{(user) => <Layout user={user}><ChangesPage /></Layout>}</RequireUser>} />
+      <Route path="/hr/logins" element={<RequireUser hr>{(user) => <Layout user={user}><LoginsPage /></Layout>}</RequireUser>} />
+      <Route path="/account/password" element={<RequireUser>{(user) => <Layout user={user}><ChangePasswordPage /></Layout>}</RequireUser>} />
       <Route path="*" element={<RequireUser>{(user) => <Layout user={user}><NotFoundPage /></Layout>}</RequireUser>} />
     </Routes>
   );

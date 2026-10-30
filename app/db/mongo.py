@@ -36,6 +36,7 @@ def ensure_indexes(db: Database) -> None:
     db.exceptions.create_index([("cycle_id", ASCENDING)])
     db.changes.create_index([("cycle_id", ASCENDING), ("changed_at", DESCENDING)])
     db.email_log.create_index([("cycle_id", ASCENDING), ("manager_email", ASCENDING)])
+    db.accounts.create_index([("email", ASCENDING)], unique=True)
 
 
 def ping(db: Database) -> bool:

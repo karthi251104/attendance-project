@@ -15,13 +15,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.auth.accounts import ensure_hr_accounts
 from app.auth.session import CsrfError, Forbidden, NotLoggedIn
 from app.config import Settings, get_settings
 from app.db.file_store import FileStore, GridFSFileStore
 from app.db.mongo import connect, ensure_indexes
 from app.db.repositories import Repository
 from app.email.base import EmailSender
-from app.routes import auth, cycles, health
+from app.routes import accounts, auth, cycles, health
 from app.spa import mount_spa
 from app.web import Services
 
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None, *, repo: Repository | None = No
         db = connect(settings)
         ensure_indexes(db)
         repo = Repository(db)
+    ensure_hr_accounts(repo, settings)
     services = Services(settings=settings, repo=repo, files=files or GridFSFileStore(repo.db),
                         email_sender=email_sender or make_email_sender(settings))
 
@@ -66,7 +68,7 @@ def create_app(settings: Settings | None = None, *, repo: Repository | None = No
     app.state.services = services
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key, session_cookie="attendance_session",
                        max_age=settings.session_hours * 3600, same_site="lax", https_only=settings.is_production)
-    for module in (health, auth, cycles):
+    for module in (health, auth, accounts, cycles):
         app.include_router(module.router)
     mount_spa(app, settings.frontend_dist_path)
 
@@ -108,8 +110,8 @@ def create_app(settings: Settings | None = None, *, repo: Repository | None = No
         log.exception("Unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse({"error": "Something went wrong. Please try again."}, status_code=500)
 
-    log.info("App started: env=%s email_mode=%s dev_login=%s frontend=%s", settings.env, settings.email_mode,
-             settings.dev_login, "built" if (settings.frontend_dist_path / "index.html").is_file() else "not built")
+    log.info("App started: env=%s sign_in=%s email_mode=%s frontend=%s", settings.env, settings.sign_in_mode,
+             settings.email_mode, "built" if (settings.frontend_dist_path / "index.html").is_file() else "not built")
     return app
 
 

@@ -1,7 +1,7 @@
 // Small fetch wrapper: same-origin cookies, the CSRF header on every change, and readable errors.
 
 import type {
-  ChangeRow, Cycle, CycleDetail, Employee, ExceptionRow, ManagerRow, SaveResult, Session,
+  ChangeRow, Cycle, CycleDetail, Employee, ExceptionRow, ManagerRow, NewLogin, Person, SaveResult, Session,
 } from "./types";
 
 let csrfToken = "";
@@ -47,8 +47,15 @@ const q = (params: Record<string, string | undefined>) => {
 
 export const api = {
   session: () => request<Session>("GET", "/api/session"),
-  devLogin: (email: string) => request<{ ok: true }>("POST", "/api/auth/dev-login", { email }),
+  login: (email: string, password: string) => request<{ ok: true }>("POST", "/api/auth/login", { email, password }),
   logout: () => request<{ redirect: string }>("POST", "/api/auth/logout"),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: true }>("POST", "/api/auth/change-password", { current_password: currentPassword, new_password: newPassword }),
+
+  people: () => request<{ people: Person[] }>("GET", "/api/accounts"),
+  createMissingLogins: () => request<{ created: NewLogin[] }>("POST", "/api/accounts/create-missing"),
+  resetPassword: (email: string) => request<NewLogin>("POST", "/api/accounts/reset", { email }),
+  setLoginActive: (email: string, active: boolean) => request<{ ok: true }>("POST", "/api/accounts/active", { email, active }),
 
   cycles: () => request<{ cycles: Cycle[] }>("GET", "/api/cycles"),
   myCycles: () => request<{ cycles: Cycle[] }>("GET", "/api/my-cycles"),

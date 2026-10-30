@@ -1,10 +1,12 @@
 """Shared helpers for routes: dependencies and the app's services."""
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from fastapi import Depends, Request
 
-from app.auth.session import CurrentUser, Forbidden, NotLoggedIn, current_user, verify_csrf
+from app.auth.accounts import session_still_valid
+from app.auth.session import CurrentUser, Forbidden, NotLoggedIn, current_user, logout_user, verify_csrf
 from app.config import Settings
 from app.core.editing import role_for
 from app.db.file_store import FileStore
@@ -24,8 +26,19 @@ def services(request: Request) -> Services:
     return request.app.state.services
 
 
-def require_user(request: Request, svc: Services = Depends(services)) -> CurrentUser:
+def signed_in_user(request: Request, svc: Services) -> CurrentUser | None:
     user = current_user(request, svc.settings)
+    if user is not None and svc.settings.sign_in_mode == "password":
+        # A disabled login or a new password ends this session straight away.
+        login_at = datetime.fromisoformat(request.session["login_at"])
+        if not session_still_valid(svc.repo, user.email, login_at):
+            logout_user(request)
+            return None
+    return user
+
+
+def require_user(request: Request, svc: Services = Depends(services)) -> CurrentUser:
+    user = signed_in_user(request, svc)
     if user is None:
         raise NotLoggedIn()
     return user

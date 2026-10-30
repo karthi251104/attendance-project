@@ -4,7 +4,8 @@
 #
 # Creates: resource group, container registry, Linux App Service plan + Web App (container), Cosmos DB for
 # MongoDB, and a GitHub deploy identity (OpenID Connect, no password). Prints the GitHub secrets and
-# variables to add at the end. Microsoft sign-in and Mail.Send are set up separately (docs/DEPLOYMENT.md).
+# variables to add at the end. Sign-in is by ID + password (AUTH_MODE=password); Microsoft sign-in and
+# Mail.Send are optional and set up separately (docs/DEPLOYMENT.md).
 #
 # Override any of these before running, e.g.  LOCATION=southindia APP=attendance-hr bash infra/azure-setup.sh
 set -euo pipefail
@@ -57,6 +58,7 @@ az webapp config appsettings set -g "$RG" -n "$APP" -o none --settings \
   MONGODB_URI="$MONGODB_URI" \
   MONGODB_DB=attendance \
   DEV_LOGIN=false \
+  AUTH_MODE=password \
   TIMEZONE=Asia/Kolkata \
   EMAIL_MODE=console
 
@@ -88,6 +90,6 @@ Add these in GitHub: repo $GITHUB_REPO > Settings > Secrets and variables > Acti
 And create the environment "production" (Settings > Environments), optionally with required reviewers.
 
 Then finish the app settings in Azure (Web App > Settings > Environment variables), see docs/DEPLOYMENT.md:
-  HR_ADMIN_EMAILS, ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, SENDER_MAILBOX, EMAIL_MODE=graph
+  HR_ADMIN_EMAILS and INITIAL_HR_PASSWORD (HR signs in with it once, then changes it)
 The first deploy starts on the next push to main (or Actions > Deploy > Run workflow).
 EOF

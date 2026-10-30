@@ -4,14 +4,17 @@ Three levels, from fastest to most real:
 
 | Level | What it proves | Needs |
 |---|---|---|
-| Automated tests | Rules, Excel reading/writing, permissions, API, UI logic | Nothing (runs in CI on every push) |
-| Local demo (`DEV_LOGIN=true`) | The whole flow on your PC, any email, no password, emails printed | Python + Node |
-| **Dev tunnel** | Real Microsoft sign-in, real emails, real managers on their own laptops and phones | The items in "What is needed" |
+| Automated tests | Rules, Excel reading/writing, logins, permissions, API, UI logic | Nothing (runs in CI on every push) |
+| Local demo | The whole flow on your PC | Python + Node |
+| **Dev tunnel** | Real managers signing in from their own laptops and phones | The dev-tunnel tool and a work account |
 
-## Dev tunnel: test with real sign-in and real email, before Azure
+No IT setup is needed: sign-in is by ID (work email) and password given by HR, and the portal sends no emails
+(`EMAIL_MODE=console`); HR sends the link and passwords.
 
-A dev tunnel gives the portal on your PC a public `https://…devtunnels.ms` address, so managers can open the
-email link from anywhere while it still runs on your machine.
+## Dev tunnel: let testers reach the portal on your PC
+
+A dev tunnel gives the portal on your PC a public `https://…devtunnels.ms` address, so testers can open it from
+anywhere while it still runs on your machine.
 
 ### One-time setup
 
@@ -22,8 +25,7 @@ email link from anywhere while it still runs on your machine.
    devtunnel user login
    ```
 
-2. Create a tunnel that keeps the same address every time (the address must not change, because it is
-   registered in Entra ID):
+2. Create a tunnel that keeps the same address every time:
 
    ```powershell
    devtunnel create attendance-test --allow-anonymous
@@ -32,26 +34,21 @@ email link from anywhere while it still runs on your machine.
    ```
 
    Note the URL for port 8000, for example `https://abcd1234-8000.inc1.devtunnels.ms`.
-   `--allow-anonymous` lets managers reach the page without a dev-tunnel account; the portal itself still
-   requires Microsoft sign-in.
+   `--allow-anonymous` lets testers reach the page without a dev-tunnel account; the portal itself still asks
+   for their ID and password.
 
-3. In the Entra app registration (docs/DEPLOYMENT.md step 3), add the redirect URI
-   `https://abcd1234-8000.inc1.devtunnels.ms/auth/callback`.
-
-4. Create `.env` in the repository root:
+3. Create `.env` in the repository root:
 
    ```ini
    ENV=development
    APP_BASE_URL=https://abcd1234-8000.inc1.devtunnels.ms
    SECRET_KEY=<any long random text>
    MONGODB_URI=mongodb://localhost:27017      # docker compose up -d mongo; or mongomock:// (lost on restart)
+   AUTH_MODE=password
    DEV_LOGIN=false
    HR_ADMIN_EMAILS=you@company.com
-   ENTRA_TENANT_ID=...
-   ENTRA_CLIENT_ID=...
-   ENTRA_CLIENT_SECRET=...
-   EMAIL_MODE=graph                           # or console to only print emails while you start
-   SENDER_MAILBOX=hr.attendance@company.com
+   INITIAL_HR_PASSWORD=<a first HR password, 8+ characters>
+   EMAIL_MODE=console
    ```
 
 ### Each test session
@@ -68,12 +65,15 @@ devtunnel host attendance-test
 ```
 
 Open the tunnel URL. The first time, the browser shows a dev-tunnel notice page; click **Continue**.
-Stop with Ctrl+C in both terminals. Tip: for a test with real managers, use a copy of the workbook where you
-changed a few `Email ID` cells of managers in HC_Teamlease to the testers' work emails, so nobody else gets mail.
+Sign in as HR with `INITIAL_HR_PASSWORD`, change it under **Password**, upload the workbook, then
+**Logins → Create logins** and give each tester their ID and password. Stop with Ctrl+C in both terminals.
+
+Tip: use a copy of the workbook where a few managers' `Email ID` cells in HC_Teamlease are the testers' emails
+(or demo emails), so the testers sign in as those managers.
 
 ## Test checklist
 
-Tick each one. ✱ = needs real sign-in or email (dev tunnel or Azure).
+Tick each one.
 
 ### Upload (HR)
 - [ ] Upload the SAP file with SAP + HC_Teamlease: the review page shows the right employee and manager counts.
@@ -82,18 +82,18 @@ Tick each one. ✱ = needs real sign-in or email (dev tunnel or Azure).
 - [ ] Exceptions list the employees missing from HC_Teamlease and unknown schedules; the CSV downloads.
 - [ ] Upload the same month again: the new upload becomes active, the old one shows "Older version".
 
-### Sign-in ✱
-- [ ] HR email → HR screens. A manager's email → only "Your team's attendance".
-- [ ] Someone who is neither → "Nothing to review".
-- [ ] An account from another organisation is refused.
-- [ ] Sign out, then press Back: the data is not shown again.
-- [ ] After 8 hours the session ends and asks to sign in again.
-
-### Email ✱
-- [ ] "Email all managers": each tester gets exactly one email from the HR mailbox, with the team size and link.
-- [ ] The email contains no employee names or IDs.
-- [ ] Resend to one manager works; a manager without an email shows **Failed** with the reason.
-- [ ] The link in the email opens the team page after sign-in.
+### Logins
+- [ ] HR signs in with `INITIAL_HR_PASSWORD` and changes it; the old password no longer works.
+- [ ] **Logins → Create logins**: every manager of the upload gets a password; Copy all and Download CSV work.
+      Running it again creates nothing new.
+- [ ] A manager signs in with their email (any capitals) and password and sees only their team.
+- [ ] A wrong password, and an email that has no login, both say "The email or password is wrong."
+- [ ] Five wrong passwords lock the login for 15 minutes; HR's **Reset password** unlocks it with a new password.
+- [ ] A manager changes their own password under **Password**; the old one stops working.
+- [ ] HR resets a manager's password while the manager is signed in elsewhere: that session ends at once.
+- [ ] HR disables a login: the person is signed out and cannot sign in; **Enable** lets them in again.
+- [ ] A manager cannot open the Logins page or any HR page.
+- [ ] Sign out, then press Back: the data is not shown again. After 8 hours the session ends.
 
 ### Manager corrections
 - [ ] A manager sees only their own team (compare with HC_Teamlease).
@@ -125,13 +125,11 @@ Tick each one. ✱ = needs real sign-in or email (dev tunnel or Azure).
 
 | # | Item | Used for |
 |---|---|---|
-| 1 | **Entra ID app registration**: tenant ID, client ID, client secret (or permission for me to create it) | Microsoft sign-in and sending email |
-| 2 | **Sender mailbox**, e.g. `hr.attendance@company.com`, and an Exchange admin to scope `Mail.Send` to it | Manager emails |
-| 3 | **Admin consent** for the app's Graph permissions | Sign-in and Mail.Send |
-| 4 | **HR admin emails** | Who sees the HR screens |
-| 5 | **2–3 test managers** (work accounts) and which employees they manage | Real manager testing |
-| 6 | **A MongoDB** for testing: Docker on the test PC, or the Cosmos DB from the Azure setup | Data that survives restarts |
-| 7 | **Azure subscription** access (Contributor) to run `infra/azure-setup.sh` | Production |
-| 8 | **GitHub repo admin** to add the secrets and the `production` environment | Automatic deploys |
-| 9 | Optional: a **custom domain** (e.g. `attendance.company.com`) and its certificate | A friendlier address |
-| 10 | Confirm the **PL** column name: the sheet calls it "Maternity Leave"; is it paternity or privilege leave? | Labels in the sheet and the portal |
+| 1 | **HR admin emails** (and a first HR password, set by you as `INITIAL_HR_PASSWORD`) | Who sees the HR screens |
+| 2 | **Demo / test manager emails**, and which managers in HC_Teamlease they stand in for | Testing as managers |
+| 3 | **A MongoDB** for testing: Docker on the test PC, or the Cosmos DB from the Azure setup | Data that survives restarts |
+| 4 | **Azure subscription** access (Contributor) to run `infra/azure-setup.sh` | Production |
+| 5 | **GitHub repo admin** to add the secrets and the `production` environment | Automatic deploys |
+| 6 | Optional: a **custom domain** (e.g. `attendance.company.com`) | A friendlier address |
+| 7 | Confirm the **PL** column name: the sheet calls it "Maternity Leave"; is it paternity or privilege leave? | Labels in the sheet and the portal |
+| 8 | Optional, later: Microsoft sign-in or automatic emails need IT (docs/DEPLOYMENT.md step 4) | Not needed to go live |

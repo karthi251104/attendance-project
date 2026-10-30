@@ -2,8 +2,8 @@
 
 HR uploads the monthly attendance workbook downloaded from SAP, with the `SAP` and `HC_Teamlease`
 sheets. The portal does the job the Excel macro used to do: it builds the `TO CONSIDER` sheet from those
-two sheets and calculates every day from `SAP`. It then emails each manager a link, and managers correct
-their own team's days. HR downloads the finished workbook.
+two sheets and calculates every day from `SAP`. HR gives each manager an ID (their work email) and a password,
+and managers correct their own team's days. HR downloads the finished workbook.
 
 - **No AI.** The status rules are a direct translation of the macro formula (`app/core/rules.py`), and
   `TO CONSIDER` is built like the macro's pivot table and VLOOKUPs (`app/core/workbook_reader.py`).
@@ -23,11 +23,11 @@ their own team's days. HR downloads the finished workbook.
  Browser ──HTTPS──▶ Azure App Service (one Docker container, port 8000)
                      ├─ React app (frontend/, built by Vite, served as static files)
                      ├─ JSON API /api/*  (FastAPI, app/)
-                     ├─ Sign-in /auth/*  (Microsoft Entra ID)
+                     ├─ Sign-in: ID + password given by HR (or, optionally, Microsoft Entra ID)
                      └─ /healthz
                            │
                            ├──▶ Cosmos DB for MongoDB (cycles, employees, audit log, uploaded files in GridFS)
-                           └──▶ Microsoft Graph (manager emails, from one HR mailbox)
+                           └──▶ Microsoft Graph (optional: Microsoft sign-in, emails from one HR mailbox)
 ```
 
 | Folder | What it is |
@@ -77,8 +77,10 @@ their own team's days. HR downloads the finished workbook.
 1. **Upload** (HR): `.xlsm` / `.xlsx`, up to 25 MB, with an optional correction deadline. The file must have
    `SAP` and `HC_Teamlease` and **no** `TO CONSIDER` sheet (upload it before running the macro).
 2. **Review** (HR): summary, exceptions (CSV download), managers with email status and number of changes.
-3. **Email**: one email per manager with the team size and a link. No employee data goes in the email.
-4. **Correct** (manager): the manager signs in with their Microsoft work account and sees only employees whose
+3. **Logins** (HR): **Logins → Create logins** gives every manager a password; HR sends each manager the portal
+   link and their own password. Managers can change it; HR can reset or disable a login. (Optional: the portal
+   emails the link itself, see docs/DEPLOYMENT.md.)
+4. **Correct** (manager): the manager signs in with their work email and password and sees only employees whose
    `Manager Email` is theirs. They click a day, pick the status and press **Save**. Every change goes into an
    append-only audit log.
 5. **Download** (HR): the original file with the macro's work done:
@@ -111,8 +113,9 @@ cd frontend && npm run dev
 
 Open http://localhost:5173. Vite forwards `/api` and `/auth` to the API, so it behaves like production.
 With `DEV_LOGIN=true` you sign in with any email (no password): an email in `HR_ADMIN_EMAILS` gets the HR
-screens, a `Manager Email` from the workbook gets that manager's team. Emails are printed in the API terminal
-(`EMAIL_MODE=console`).
+screens, a `Manager Email` from the workbook gets that manager's team. To try the real password sign-in, set
+`DEV_LOGIN=false` and `INITIAL_HR_PASSWORD=<something>`, sign in as HR with it, then use **Logins**.
+Emails are printed in the API terminal (`EMAIL_MODE=console`).
 
 To run exactly what production runs (needs Docker): `docker compose up --build`, then http://localhost:8000.
 
@@ -150,9 +153,11 @@ All settings are environment variables (see `.env.example`). In Azure they are A
 | `APP_BASE_URL` | `http://localhost:8000` | Public URL, used in emails and the sign-in redirect. `https://` in production |
 | `SECRET_KEY` | — | Signs the session cookie. At least 32 random characters in production |
 | `MONGODB_URI` / `MONGODB_DB` | local / `attendance` | Cosmos DB connection string (must contain `retrywrites=false`) |
+| `AUTH_MODE` | `password` | `password`: ID (work email) + password given by HR. `entra`: Microsoft sign-in |
 | `DEV_LOGIN` | `false` | Email-only sign-in for development. **The app refuses to start if this is true in production** |
 | `HR_ADMIN_EMAILS` | — | Comma-separated HR emails |
-| `ENTRA_TENANT_ID` / `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | — | App registration (see docs/DEPLOYMENT.md) |
+| `INITIAL_HR_PASSWORD` | — | First password for each HR email without a login (password mode). HR changes it after signing in |
+| `ENTRA_TENANT_ID` / `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` | — | Only for `AUTH_MODE=entra` or `EMAIL_MODE=graph` (see docs/DEPLOYMENT.md) |
 | `EMAIL_MODE` | `console` | `graph` to send real email |
 | `SENDER_MAILBOX` | — | Mailbox the emails are sent from |
 | `EMAIL_CC` | — | Optional CC, comma-separated |
@@ -173,8 +178,10 @@ All under `/api`, JSON, same-origin session cookie. Every change (POST/PUT) need
 | Method and path | Who | What |
 |---|---|---|
 | `GET /api/session` | anyone | Signed-in user, CSRF token, sign-in mode, allowed statuses |
-| `POST /api/auth/dev-login`, `POST /api/auth/logout` | anyone | Dev sign-in (off in production), sign-out |
-| `GET /auth/login`, `GET /auth/callback` | anyone | Microsoft sign-in redirects |
+| `POST /api/auth/login`, `POST /api/auth/logout` | anyone | Sign in with email + password (email only with `DEV_LOGIN`), sign out |
+| `POST /api/auth/change-password` | signed in | Change your own password |
+| `GET /api/accounts`, `POST /api/accounts/create-missing`, `/reset`, `/active` | HR | Logins: list, create for everyone missing, reset a password, disable/enable |
+| `GET /auth/login`, `GET /auth/callback` | anyone | Microsoft sign-in redirects (`AUTH_MODE=entra`) |
 | `GET /api/cycles`, `POST /api/cycles` | HR | List cycles, upload a workbook (multipart: `file`, `deadline`) |
 | `GET /api/my-cycles` | manager | Active cycles where the user is a manager |
 | `GET /api/cycles/{id}` | HR, its managers | The cycle with the user's role and whether they can edit |
@@ -192,6 +199,9 @@ All under `/api`, JSON, same-origin session cookie. Every change (POST/PUT) need
   - managers can read and change only their own team,
   - all edits are validated against `ALLOWED_STATUSES` and the cycle's dates,
   - a save is all-or-nothing.
+- Passwords are stored only as salted scrypt hashes; generated passwords are shown to HR once. Five wrong
+  passwords lock a login for 15 minutes. A reset, a password change or disabling a login ends that person's
+  other sessions at once. A wrong email and a wrong password get the same answer.
 - Sessions use a signed cookie: HttpOnly, SameSite=Lax, Secure in production. A session lasts at most 8 hours
   from sign-in. All changes need a CSRF token.
 - Strict Content Security Policy (scripts, styles and fonts only from the app itself), X-Frame-Options DENY,

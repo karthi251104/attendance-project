@@ -12,10 +12,9 @@ git push ─▶ GitHub Actions: CI (tests + build + Docker smoke test) ─▶ bu
 
 ## What you need
 
-- An Azure subscription where you can create resources (Contributor), and permission to create an app
-  registration in Entra ID.
-- A Microsoft 365 admin who can grant admin consent and restrict `Mail.Send` (step 3).
+- An Azure subscription where you can create resources (Contributor).
 - Admin access to the GitHub repository.
+- Only if you want Microsoft sign-in or automatic emails (step 4, optional): a Microsoft 365 admin.
 
 ## 1. Create the Azure resources (once, about 10 minutes)
 
@@ -48,15 +47,31 @@ In the repository: **Settings → Secrets and variables → Actions**.
 Then **Settings → Environments → New environment** `production`. Optional: add yourself as a required
 reviewer, so each deploy waits for your approval.
 
-## 3. Microsoft sign-in and email (Entra ID app registration)
+## 3. Finish the app settings
 
-One registration does both.
+**Web App → Settings → Environment variables**, add:
+
+| Name | Value |
+|---|---|
+| `HR_ADMIN_EMAILS` | the HR people, comma-separated |
+| `INITIAL_HR_PASSWORD` | a first password for HR (at least 8 characters). Each HR email gets a login with it when the app starts; HR then changes it under **Password** |
+
+Sign-in is by **ID and password** (`AUTH_MODE=password`, set by the script): the ID is the person's work email.
+After the first upload, HR opens **Logins → Create logins**, copies or downloads the generated passwords and gives
+each manager their own. Managers can change their password after signing in; HR can reset a forgotten one or
+disable a login. Five wrong passwords lock a login for 15 minutes.
+
+Emails stay off (`EMAIL_MODE=console`): HR sends managers the portal link and their password themselves.
+
+## 4. Optional: Microsoft sign-in and automatic emails
+
+Only if IT agrees. One Entra ID app registration does both.
 
 1. **Entra admin centre → App registrations → New registration**: name `Attendance Portal`, accounts in this
    organisational directory only, redirect URI platform **Web** `https://<app>.azurewebsites.net/auth/callback`.
 2. **Certificates & secrets → New client secret.** Note the expiry date and renew it before then.
-3. **API permissions → Add → Microsoft Graph**: delegated `openid`, `profile`, `email`, `User.Read`;
-   application `Mail.Send`. Click **Grant admin consent**.
+3. **API permissions → Add → Microsoft Graph**: delegated `openid`, `profile`, `email`, `User.Read` (sign-in);
+   application `Mail.Send` (emails). Click **Grant admin consent**.
 4. **Restrict `Mail.Send` to the sender mailbox** (otherwise the app could send as anyone). An Exchange admin runs:
 
    ```powershell
@@ -66,21 +81,15 @@ One registration does both.
    ```
 
    Then remove the tenant-wide `Mail.Send` consent, so only the scoped assignment grants it.
+5. Add the settings:
 
-## 4. Finish the app settings
+   | Name | Value |
+   |---|---|
+   | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | from above (better: Key Vault references) |
+   | `AUTH_MODE` | `entra`, for Microsoft sign-in instead of passwords |
+   | `EMAIL_MODE`, `SENDER_MAILBOX` | `graph` and `hr.attendance@company.com`, for automatic emails |
 
-**Web App → Settings → Environment variables**, add:
-
-| Name | Value |
-|---|---|
-| `HR_ADMIN_EMAILS` | the HR people, comma-separated |
-| `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | from step 3 (better: Key Vault references) |
-| `EMAIL_MODE` | `graph` |
-| `SENDER_MAILBOX` | `hr.attendance@company.com` |
-| `EMAIL_CC` | optional |
-
-The app refuses to start in production while the Entra settings are missing, so do this before the first deploy.
-
+   Emails can be switched on while keeping passwords, and the other way round.
 ## 5. Deploy
 
 Push to `main`, or **Actions → Deploy → Run workflow**. The run shows the URL when it is healthy.

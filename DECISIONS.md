@@ -151,3 +151,27 @@ The user chose a React web app (not React Native), GitHub Actions, and one Docke
     password is stored in GitHub. The deploy job is skipped until `AZURE_WEBAPP_NAME` is set.
 49. **Docker could not be run on the development PC**, so the image is first built and started in CI (the
     smoke test runs it against a MongoDB service and checks `/healthz`, the React page and the API).
+
+## Sign-in by ID and password (30/10/2026)
+
+The user asked for the simplest setup without IT: HR gives each manager an ID and password; the manager may
+change it later. No emails are sent by the portal; HR sends the link and passwords.
+
+50. **`AUTH_MODE=password` is the default**; `entra` (Microsoft sign-in) stays available. `DEV_LOGIN` still
+    overrides both in development. Production no longer needs the Entra settings unless `AUTH_MODE=entra` or
+    `EMAIL_MODE=graph`.
+51. **The login ID is the work email**, because teams are matched by `Manager Email`. Emails are compared in
+    lower case.
+52. **HR creates logins in bulk** (Logins → Create logins: everyone in an active cycle without one) and resets
+    one at a time. Generated passwords look like `Kp7m-Rx4q-Zt9w` (no look-alike characters) and are shown once,
+    with Copy and Download CSV. They are never stored readable.
+53. **Hashing:** scrypt from the Python standard library (no new dependency), salted, about 50 ms per check.
+    Unknown emails get the same work and the same answer as wrong passwords.
+54. **Lockout:** 5 wrong passwords lock a login for 15 minutes; an HR reset unlocks it.
+55. **Sessions end at once** when the password is reset or changed, or the login is disabled: every request
+    checks the account's `password_changed_at` against the session's sign-in time. Changing your own password
+    renews the current session, so that device stays signed in.
+56. **The first HR login:** `INITIAL_HR_PASSWORD` gives each `HR_ADMIN_EMAILS` address without a login that
+    password at startup. It never changes an existing login, so it can stay set.
+57. **Not forced to change the password** on first sign-in, as the user asked; the Password page is always
+    available.
